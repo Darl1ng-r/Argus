@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Argus — Ratio, in the open.</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Crimson+Pro:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --marble:#F6F3EC;
+    --marble-panel:#EFEAE0;
+    --marble-line:#DED6C3;
+    --ink:#2B2622;
+    --ink-soft:#5B5348;
+    --gold:#B8892B;
+    --gold-bright:#D4AF37;
+    --aegean:#2E5C7A;
+    --laurel:#6E7B4A;
+    --oxide:#A2472E;
+    --support-bar:#7C8A55;
+    --contest-bar:#B25A3E;
+    --shadow: 0 1px 2px rgba(43,38,34,0.06), 0 6px 16px rgba(43,38,34,0.08);
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(circle at 1px 1px, rgba(184,137,43,0.10) 1px, transparent 1px) 0 0/26px 26px,
+      var(--marble);
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    overflow:hidden;
+  }
+
+  /* ---------- HEADER ---------- */
+  header{
+    position:relative;
+    z-index:20;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:16px 28px;
+    background:linear-gradient(180deg, rgba(246,243,236,0.98), rgba(246,243,236,0.9));
+    border-bottom:1px solid var(--marble-line);
+  }
+  .brand{display:flex; align-items:baseline; gap:14px;}
+  .brand h1{
+    font-family:'Cinzel',serif;
+    font-weight:700;
+    font-size:22px;
+    letter-spacing:0.14em;
+    margin:0;
+    color:var(--ink);
+  }
+  .brand .tag{
+    font-family:'Crimson Pro',serif;
+    font-style:italic;
+    font-size:14px;
+    color:var(--ink-soft);
+  }
+  .topic-line{
+    font-family:'Crimson Pro',serif;
+    font-size:15px;
+    color:var(--ink-soft);
+    max-width:420px;
+    text-align:center;
+    line-height:1.3;
+  }
+  .topic-line b{color:var(--ink); font-weight:600;}
+
+  nav.modes{
+    display:flex;
+    background:var(--marble-panel);
+    border:1px solid var(--marble-line);
+    border-radius:8px;
+    padding:3px;
+    gap:2px;
+  }
+  nav.modes button{
+    font-family:'Cinzel',serif;
+    font-size:11px;
+    letter-spacing:0.08em;
+    background:transparent;
+    border:none;
+    padding:8px 16px;
+    border-radius:6px;
+    color:var(--ink-soft);
+    cursor:pointer;
+    transition:all .15s ease;
+  }
+  nav.modes button.active{
+    background:var(--marble);
+    color:var(--ink);
+    box-shadow: var(--shadow);
+  }
+  nav.modes button:hover:not(.active){color:var(--ink);}
+
+  .fork-btn{
+    font-family:'Inter',sans-serif;
+    font-weight:600;
+    font-size:12.5px;
+    background:var(--ink);
+    color:var(--marble);
+    border:none;
+    padding:9px 16px;
+    border-radius:7px;
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    gap:7px;
+    transition:transform .12s ease, background .15s ease;
+  }
+  .fork-btn:hover{background:#3d362f; transform:translateY(-1px);}
+  .fork-btn svg{width:13px; height:13px;}
+
+  /* ---------- LAYOUT ---------- */
+  .app{display:flex; height:calc(100% - 65px);}
+  .canvas-area{
+    position:relative;
+    flex:1;
+    overflow:auto;
+    cursor:grab;
+  }
+  .canvas-area.panning{cursor:grabbing;}
+  #graph-wrapper{
+    position:relative;
+    width:1500px;
+    height:900px;
+    transform-origin: 0 0;
+    transition: transform .18s ease;
+  }
+  svg.edges{position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;}
+
+  /* ---------- NODES ---------- */
+  .node{
+    position:absolute;
+    width:212px;
+    background:linear-gradient(180deg,#FFFDF8,#F3EEE1);
+    border:1px solid var(--marble-line);
+    border-radius:8px 8px 5px 5px;
+    box-shadow: var(--shadow);
+    padding:12px 13px 11px;
+    cursor:grab;
+    user-select:none;
+    transition: box-shadow .15s ease, opacity .25s ease, filter .25s ease, border-color .15s ease;
+  }
+  .node:active{cursor:grabbing;}
+  .node:hover{box-shadow:0 2px 4px rgba(43,38,34,0.1), 0 10px 22px rgba(43,38,34,0.14);}
+  .node.selected{border-color:var(--gold); box-shadow:0 0 0 2px rgba(184,137,43,0.35), var(--shadow);}
+  .node .eyebrow{
+    font-family:'Cinzel',serif;
+    font-size:9.5px;
+    letter-spacing:0.1em;
+    display:flex;
+    align-items:center;
+    gap:5px;
+    margin-bottom:7px;
+  }
+  .node .eyebrow .dot{width:6px; height:6px; border-radius:50%; flex-shrink:0;}
+  .node .content{
+    font-family:'Crimson Pro',serif;
+    font-size:14.5px;
+    line-height:1.35;
+    color:var(--ink);
+  }
+  .node .meta{
+    display:flex;
+    gap:10px;
+    margin-top:9px;
+    font-size:10.5px;
+    color:var(--ink-soft);
+    align-items:center;
+  }
+  .node .meta .laurel{display:flex; align-items:center; gap:3px; color:var(--laurel);}
+  .node .meta svg{width:11px; height:11px;}
+
+  /* root = temple */
+  .node.root{
+    width:280px;
+    text-align:center;
+    background:linear-gradient(180deg,#FFFDF8,#F0EADA);
+    border:1px solid var(--gold);
+    border-radius:4px 4px 6px 6px;
+    padding:20px 18px 14px;
+    box-shadow:0 2px 4px rgba(184,137,43,0.15), 0 10px 24px rgba(43,38,34,0.12);
+  }
+  .node.root::before{
+    content:"";
+    position:absolute;
+    left:50%; top:-19px;
+    transform:translateX(-50%);
+    width:0; height:0;
+    border-left:150px solid transparent;
+    border-right:150px solid transparent;
+    border-bottom:20px solid var(--gold);
+  }
+  .node.root::after{
+    content:"";
+    position:absolute;
+    left:50%; top:-16px;
+    transform:translateX(-50%);
+    width:0; height:0;
+    border-left:144px solid transparent;
+    border-right:144px solid transparent;
+    border-bottom:19px solid #F0EADA;
+  }
+  .node.root .columns{
+    display:flex;
+    justify-content:space-between;
+    margin-top:12px;
+    padding-top:8px;
+    border-top:1px solid rgba(184,137,43,0.4);
+  }
+  .node.root .columns span{
+    width:2px; height:10px;
+    background:var(--gold);
+    opacity:0.55;
+  }
+  .node.root .eyebrow{justify-content:center; color:var(--gold); margin-bottom:8px;}
+  .node.root .content{font-size:16px; font-weight:500;}
+
+  /* dim in steelman mode */
+  .mode-steelman .node:not([data-steel="1"]){opacity:0.25; filter:grayscale(55%);}
+  .mode-steelman .node.root{opacity:1; filter:none;}
+
+  /* ---------- SIDE PANEL ---------- */
+  aside{
+    width:308px;
+    background:var(--marble-panel);
+    border-left:1px solid var(--marble-line);
+    padding:22px 20px;
+    overflow-y:auto;
+    flex-shrink:0;
+  }
+  aside h2{
+    font-family:'Cinzel',serif;
+    font-size:12px;
+    letter-spacing:0.1em;
+    color:var(--ink-soft);
+    margin:0 0 14px;
+    padding-bottom:10px;
+    border-bottom:1px solid var(--marble-line);
+  }
+  .panel-empty{
+    font-family:'Crimson Pro',serif;
+    font-style:italic;
+    color:var(--ink-soft);
+    font-size:14.5px;
+    line-height:1.5;
+    margin-top:6px;
+  }
+  .panel-eyebrow{
+    font-family:'Cinzel',serif;
+    font-size:10px;
+    letter-spacing:0.09em;
+    display:flex;
+    align-items:center;
+    gap:6px;
+    margin-bottom:10px;
+  }
+  .panel-eyebrow .dot{width:7px; height:7px; border-radius:50%;}
+  .panel-content{
+    font-family:'Crimson Pro',serif;
+    font-size:16px;
+    line-height:1.45;
+    margin-bottom:18px;
+    color:var(--ink);
+  }
+  .score-row{margin-bottom:10px;}
+  .score-label{
+    display:flex; justify-content:space-between;
+    font-size:11px; color:var(--ink-soft); margin-bottom:4px;
+  }
+  .score-track{
+    background:#E2DBC8;
+    height:7px;
+    border-radius:4px;
+    overflow:hidden;
+  }
+  .score-fill{height:100%; border-radius:4px; transition:width .3s ease;}
+  .score-fill.support{background:var(--support-bar);}
+  .score-fill.contest{background:var(--contest-bar);}
+
+  .vote-row{display:flex; gap:8px; margin:16px 0 20px;}
+  .vote-btn{
+    flex:1;
+    font-family:'Inter',sans-serif;
+    font-size:12px;
+    font-weight:600;
+    padding:8px 6px;
+    border-radius:6px;
+    border:1px solid var(--marble-line);
+    background:#FFFDF8;
+    cursor:pointer;
+    transition:transform .1s ease, border-color .15s ease;
+  }
+  .vote-btn:hover{transform:translateY(-1px);}
+  .vote-btn.support{color:var(--support-bar);}
+  .vote-btn.support:hover{border-color:var(--support-bar);}
+  .vote-btn.contest{color:var(--contest-bar);}
+  .vote-btn.contest:hover{border-color:var(--contest-bar);}
+
+  .add-toggle{
+    width:100%;
+    font-family:'Cinzel',serif;
+    font-size:11px;
+    letter-spacing:0.08em;
+    background:var(--ink);
+    color:var(--marble);
+    border:none;
+    border-radius:6px;
+    padding:11px;
+    cursor:pointer;
+    transition:background .15s ease;
+  }
+  .add-toggle:hover{background:#3d362f;}
+
+  .add-form{margin-top:14px; display:none;}
+  .add-form.open{display:block;}
+  .add-form label{
+    display:block;
+    font-size:10.5px;
+    letter-spacing:0.04em;
+    color:var(--ink-soft);
+    margin-bottom:5px;
+    text-transform:uppercase;
+  }
+  .add-form select, .add-form textarea{
+    width:100%;
+    font-family:'Inter',sans-serif;
+    font-size:13px;
+    border:1px solid var(--marble-line);
+    border-radius:6px;
+    padding:8px 9px;
+    background:#FFFDF8;
+    color:var(--ink);
+    margin-bottom:12px;
+    resize:vertical;
+  }
+  .add-form textarea{min-height:64px; font-family:'Crimson Pro',serif; font-size:14.5px;}
+  .add-form .submit-btn{
+    width:100%;
+    background:var(--gold);
+    color:#FFFDF8;
+    border:none;
+    font-family:'Inter',sans-serif;
+    font-weight:600;
+    font-size:12.5px;
+    padding:9px;
+    border-radius:6px;
+    cursor:pointer;
+  }
+  .add-form .submit-btn:hover{background:var(--gold-bright);}
+
+  /* ---------- LEGEND ---------- */
+  .legend{
+    position:absolute;
+    left:20px; bottom:20px;
+    background:rgba(246,243,236,0.92);
+    border:1px solid var(--marble-line);
+    border-radius:8px;
+    padding:12px 16px;
+    font-size:11px;
+    box-shadow:var(--shadow);
+    backdrop-filter: blur(2px);
+  }
+  .legend h3{
+    font-family:'Cinzel',serif;
+    font-size:9.5px;
+    letter-spacing:0.09em;
+    margin:0 0 8px;
+    color:var(--ink-soft);
+  }
+  .legend-item{display:flex; align-items:center; gap:7px; margin-bottom:5px; color:var(--ink-soft);}
+  .legend-item:last-child{margin-bottom:0;}
+  .legend-line{width:20px; height:2px; border-radius:1px;}
+
+  /* ---------- ZOOM ---------- */
+  .zoom-ctrl{
+    position:absolute;
+    right:20px; bottom:20px;
+    display:flex;
+    flex-direction:column;
+    background:rgba(246,243,236,0.92);
+    border:1px solid var(--marble-line);
+    border-radius:8px;
+    box-shadow:var(--shadow);
+    overflow:hidden;
+  }
+  .zoom-ctrl button{
+    width:34px; height:34px;
+    border:none;
+    background:transparent;
+    font-size:16px;
+    color:var(--ink-soft);
+    cursor:pointer;
+    border-bottom:1px solid var(--marble-line);
+  }
+  .zoom-ctrl button:last-child{border-bottom:none;}
+  .zoom-ctrl button:hover{background:var(--marble-panel); color:var(--ink);}
+
+  /* ---------- TOAST ---------- */
+  .toast{
+    position:fixed;
+    bottom:26px; left:50%;
+    transform:translate(-50%, 20px);
+    background:var(--ink);
+    color:var(--marble);
+    font-size:13px;
+    font-family:'Inter',sans-serif;
+    padding:11px 18px;
+    border-radius:8px;
+    display:flex; align-items:center; gap:8px;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .25s ease, transform .25s ease;
+    z-index:100;
+    box-shadow:0 10px 30px rgba(0,0,0,0.25);
+  }
+  .toast.show{opacity:1; transform:translate(-50%,0);}
+  .toast svg{width:14px; height:14px; color:var(--gold-bright); flex-shrink:0;}
+
+  /* ---------- DIFF EMPTY STATE ---------- */
+  .diff-empty{
+    display:none;
+    height:100%;
+    align-items:center;
+    justify-content:center;
+    flex-direction:column;
+    text-align:center;
+    color:var(--ink-soft);
+  }
+  .diff-empty.show{display:flex;}
+  .diff-empty svg{width:52px; height:52px; color:var(--gold); margin-bottom:16px; opacity:0.7;}
+  .diff-empty h3{font-family:'Cinzel',serif; font-size:15px; letter-spacing:0.06em; color:var(--ink); margin:0 0 8px;}
+  .diff-empty p{font-family:'Crimson Pro',serif; font-size:15px; max-width:340px; line-height:1.5; margin:0 0 18px;}
+  .diff-empty select{
+    font-family:'Inter',sans-serif; font-size:12.5px;
+    border:1px solid var(--marble-line); border-radius:6px;
+    padding:8px 12px; background:#FFFDF8; color:var(--ink-soft);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>ARGUS</h1>
+    <span class="tag">Ratio, in the open.</span>
+  </div>
+  <div class="topic-line">Should humanity prioritize <b>colonizing Mars</b> over repairing Earth's climate?</div>
+  <div style="display:flex; align-items:center; gap:14px;">
+    <nav class="modes">
+      <button class="active" data-mode="graph">GRAPH</button>
+      <button data-mode="steelman">STEELMAN</button>
+      <button data-mode="diff">DIFF</button>
+    </nav>
+    <button class="fork-btn" id="forkBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><path d="M6 9v3a3 3 0 003 3h1M18 9v3a3 3 0 01-3 3h-1"/></svg>
+      Fork
+    </button>
+  </div>
+</header>
+
+<div class="app">
+  <div class="canvas-area" id="canvasArea">
+    <div id="graph-wrapper">
+      <svg class="edges" id="edgesSvg">
+        <defs>
+          <marker id="arrow-laurel" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#6E7B4A"/></marker>
+          <marker id="arrow-oxide" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#A2472E"/></marker>
+          <marker id="arrow-aegean" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#2E5C7A"/></marker>
+          <marker id="arrow-gold" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#B8892B"/></marker>
+        </defs>
+      </svg>
+    </div>
+    <div class="diff-empty" id="diffEmpty">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 3v18M16 3v18M4 8h4M16 8h4M4 16h4M16 16h4"/></svg>
+      <h3>NO FORKS TO COMPARE, YET</h3>
+      <p>Diff view lines up two people's argument graphs on the same topic, side by side, so you can see exactly where reasoning diverges.</p>
+      <select disabled><option>Select a fork to compare against…</option></select>
+    </div>
+    <div class="legend">
+      <h3>RELATION</h3>
+      <div class="legend-item"><span class="legend-line" style="background:#6E7B4A"></span>Supports</div>
+      <div class="legend-item"><span class="legend-line" style="background:#A2472E"></span>Refutes</div>
+      <div class="legend-item"><span class="legend-line" style="background:#2E5C7A"></span>Clarifies</div>
+      <div class="legend-item"><span class="legend-line" style="background:#B8892B; border-top:2px dashed #B8892B; height:0;"></span>Needs evidence</div>
+    </div>
+    <div class="zoom-ctrl">
+      <button id="zoomIn">+</button>
+      <button id="zoomOut">−</button>
+      <button id="zoomReset" style="font-size:11px;">⟲</button>
+    </div>
+  </div>
+
+  <aside>
+    <h2 id="panelHeading">SELECTED CLAIM</h2>
+    <div id="panelBody">
+      <p class="panel-empty">Select a stele on the marble to inspect its standing, or add a claim of your own to the discussion.</p>
+    </div>
+  </aside>
+</div>
+
+<div class="toast" id="toast">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg>
+  <span id="toastMsg">Forked — this graph now lives in your workspace.</span>
+</div>
+
+<script>
+const EDGE_META = {
+  root:     {label:'ROOT CLAIM',      color:'#B8892B', marker:'arrow-gold'},
+  supports: {label:'SUPPORTS',        color:'#6E7B4A', marker:'arrow-laurel'},
+  refutes:  {label:'REFUTES',         color:'#A2472E', marker:'arrow-oxide'},
+  clarifies:{label:'CLARIFIES',       color:'#2E5C7A', marker:'arrow-aegean'},
+  evidence: {label:'NEEDS EVIDENCE',  color:'#B8892B', marker:'arrow-gold', dashed:true}
+};
+
+let nodes = [
+  {id:'root', parent:null, edgeType:'root', x:610, y:40, content:"Humanity should prioritize colonizing Mars over repairing Earth's climate.", support:340, contest:210, steel:true},
+
+  {id:'n1', parent:'root', edgeType:'supports', x:90, y:300, content:"A multi-planet species is far less likely to go extinct from any single catastrophe.", support:512, contest:88, steel:true},
+  {id:'n2', parent:'root', edgeType:'refutes', x:460, y:300, content:"Every dollar spent on Mars is a dollar not spent solving a crisis we already know is solvable.", support:405, contest:140, steel:true},
+  {id:'n3', parent:'root', edgeType:'clarifies', x:830, y:300, content:"This isn't really either/or — space agencies are under 0.1% of relevant national budgets combined.", support:180, contest:30, steel:false},
+  {id:'n4', parent:'root', edgeType:'refutes', x:1160, y:300, content:"Fixing Earth doesn't guard against non-climate extinction risks like asteroids or supervolcanoes.", support:260, contest:190, steel:false},
+
+  {id:'n1a', parent:'n1', edgeType:'evidence', x:90, y:560, content:"Mars colonies won't be self-sufficient for at least 50 years — this is a bet on unproven timelines.", support:60, contest:240, steel:false},
+  {id:'n2a', parent:'n2', edgeType:'supports', x:460, y:560, content:"Climate mitigation technology is proven and scaling. Mars life-support technology is not.", support:220, contest:40, steel:true},
+];
+
+let selectedId = null;
+let zoom = 1;
+let mode = 'graph';
+
+const wrapper = document.getElementById('graph-wrapper');
+const canvasArea = document.getElementById('canvasArea');
+const edgesSvg = document.getElementById('edgesSvg');
+
+function nodeCenter(n, edge){
+  const w = n.id === 'root' ? 280 : 212;
+  if(edge === 'top') return {x:n.x + w/2, y:n.y};
+  if(edge === 'bottom') return {x:n.x + w/2, y:n.y + (n.id==='root'?95:(estimateHeight(n)))};
+  return {x:n.x+w/2, y:n.y};
+}
+function estimateHeight(n){
+  // rough estimate based on content length for edge anchoring
+  const lines = Math.ceil(n.content.length / 30);
+  return 60 + lines*15;
+}
+
+function render(){
+  // clear old node elements
+  wrapper.querySelectorAll('.node').forEach(el=>el.remove());
+
+  nodes.forEach(n=>{
+    const el = document.createElement('div');
+    el.className = 'node' + (n.id===selectedId ? ' selected':'') + (n.id==='root' ? ' root':'');
+    el.dataset.id = n.id;
+    el.dataset.steel = n.steel ? '1':'0';
+    el.style.left = n.x+'px';
+    el.style.top = n.y+'px';
+
+    const meta = EDGE_META[n.edgeType];
+    const wellSupported = n.support > n.contest * 1.8;
+
+    el.innerHTML = `
+      <div class="eyebrow" style="color:${meta.color}">
+        <span class="dot" style="background:${meta.color}"></span>${meta.label}
+      </div>
+      <div class="content">${n.content}</div>
+      ${n.id==='root' ? `<div class="columns"><span></span><span></span><span></span><span></span><span></span><span></span></div>` : `
+      <div class="meta">
+        ${wellSupported ? `<span class="laurel"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C9 6 7 10 7 14a5 5 0 0010 0c0-4-2-8-5-12z"/></svg>well-supported</span>` : `<span>${n.support}·${n.contest}</span>`}
+      </div>`}
+    `;
+
+    el.addEventListener('pointerdown', startDrag);
+    wrapper.appendChild(el);
+  });
+
+  renderEdges();
+}
+
+function renderEdges(){
+  edgesSvg.querySelectorAll('path.edge').forEach(p=>p.remove());
+  nodes.forEach(n=>{
+    if(!n.parent) return;
+    const parent = nodes.find(p=>p.id===n.parent);
+    if(!parent) return;
+    const pw = parent.id==='root' ? 280 : 212;
+    const ph = parent.id==='root' ? 108 : estimateHeight(parent);
+    const start = {x: parent.x + pw/2, y: parent.y + ph};
+    const end = {x: n.x + 106, y: n.y};
+    const midY = (start.y + end.y)/2;
+    const meta = EDGE_META[n.edgeType];
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('class','edge');
+    path.setAttribute('d', `M${start.x},${start.y} C${start.x},${midY} ${end.x},${midY} ${end.x},${end.y}`);
+    path.setAttribute('stroke', meta.color);
+    path.setAttribute('stroke-width','1.75');
+    path.setAttribute('fill','none');
+    path.setAttribute('marker-end', `url(#${meta.marker})`);
+    if(meta.dashed) path.setAttribute('stroke-dasharray','5,4');
+    path.style.opacity='0.75';
+    edgesSvg.appendChild(path);
+  });
+}
+
+// ---- drag ----
+let dragging = null, dragOffset = {x:0,y:0}, dragMoved=false;
+function startDrag(e){
+  const id = e.currentTarget.dataset.id;
+  const n = nodes.find(x=>x.id===id);
+  dragging = n;
+  dragMoved = false;
+  const rect = e.currentTarget.getBoundingClientRect();
+  dragOffset.x = (e.clientX - rect.left)/zoom;
+  dragOffset.y = (e.clientY - rect.top)/zoom;
+  window.addEventListener('pointermove', onDrag);
+  window.addEventListener('pointerup', endDrag);
+}
+function onDrag(e){
+  if(!dragging) return;
+  dragMoved = true;
+  const wrapRect = wrapper.getBoundingClientRect();
+  dragging.x = (e.clientX - wrapRect.left)/zoom - dragOffset.x;
+  dragging.y = (e.clientY - wrapRect.top)/zoom - dragOffset.y;
+  render();
+  selectNode(dragging.id, false);
+}
+function endDrag(e){
+  if(dragging && !dragMoved){
+    selectNode(dragging.id, true);
+  }
+  dragging = null;
+  window.removeEventListener('pointermove', onDrag);
+  window.removeEventListener('pointerup', endDrag);
+}
+
+// ---- selection & panel ----
+function selectNode(id, updatePanel){
+  selectedId = id;
+  wrapper.querySelectorAll('.node').forEach(el=>{
+    el.classList.toggle('selected', el.dataset.id===id);
+  });
+  if(updatePanel!==false) renderPanel();
+}
+
+function renderPanel(){
+  const heading = document.getElementById('panelHeading');
+  const body = document.getElementById('panelBody');
+  const n = nodes.find(x=>x.id===selectedId);
+  if(!n){
+    heading.textContent = 'SELECTED CLAIM';
+    body.innerHTML = `<p class="panel-empty">Select a stele on the marble to inspect its standing, or add a claim of your own to the discussion.</p>`;
+    return;
+  }
+  const meta = EDGE_META[n.edgeType];
+  const total = n.support + n.contest;
+  const supportPct = Math.round((n.support/total)*100);
+  const contestPct = 100-supportPct;
+
+  heading.textContent = n.id==='root' ? 'THE ROOT CLAIM' : 'SELECTED CLAIM';
+  body.innerHTML = `
+    <div class="panel-eyebrow" style="color:${meta.color}"><span class="dot" style="background:${meta.color}"></span>${meta.label}</div>
+    <div class="panel-content">${n.content}</div>
+
+    <div class="score-row">
+      <div class="score-label"><span>Support</span><span>${n.support}</span></div>
+      <div class="score-track"><div class="score-fill support" style="width:${supportPct}%"></div></div>
+    </div>
+    <div class="score-row">
+      <div class="score-label"><span>Contest</span><span>${n.contest}</span></div>
+      <div class="score-track"><div class="score-fill contest" style="width:${contestPct}%"></div></div>
+    </div>
+
+    <div class="vote-row">
+      <button class="vote-btn support" id="voteSupport">▲ Support</button>
+      <button class="vote-btn contest" id="voteContest">▼ Contest</button>
+    </div>
+
+    <button class="add-toggle" id="addToggle">＋ ADD A RESPONSE</button>
+    <div class="add-form" id="addForm">
+      <label>Relation to this claim</label>
+      <select id="edgeTypeSelect">
+        <option value="supports">Supports</option>
+        <option value="refutes">Refutes</option>
+        <option value="clarifies">Clarifies</option>
+        <option value="evidence">Needs evidence</option>
+      </select>
+      <label>Your claim</label>
+      <textarea id="newClaimText" placeholder="State one claim, as plainly as you can…"></textarea>
+      <button class="submit-btn" id="submitClaim">Add to the graph</button>
+    </div>
+  `;
+
+  document.getElementById('voteSupport').onclick = ()=>{ n.support++; renderPanel(); render(); selectNode(n.id,false); };
+  document.getElementById('voteContest').onclick = ()=>{ n.contest++; renderPanel(); render(); selectNode(n.id,false); };
+  document.getElementById('addToggle').onclick = ()=>{
+    document.getElementById('addForm').classList.toggle('open');
+  };
+  document.getElementById('submitClaim').onclick = ()=>{
+    const text = document.getElementById('newClaimText').value.trim();
+    if(!text) return;
+    const edgeType = document.getElementById('edgeTypeSelect').value;
+    const siblingCount = nodes.filter(x=>x.parent===n.id).length;
+    const newNode = {
+      id: 'u'+Date.now(),
+      parent: n.id,
+      edgeType,
+      x: n.x + siblingCount*230,
+      y: n.y + 260,
+      content: text,
+      support: 1, contest: 0, steel:false
+    };
+    nodes.push(newNode);
+    render();
+    selectNode(newNode.id, true);
+    showToast('Claim added to the graph.', true);
+  };
+}
+
+// ---- modes ----
+document.querySelectorAll('nav.modes button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('nav.modes button').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    mode = btn.dataset.mode;
+    wrapper.classList.toggle('mode-steelman', mode==='steelman');
+    document.getElementById('diffEmpty').classList.toggle('show', mode==='diff');
+    canvasArea.style.display = mode==='diff' ? 'none' : 'block';
+  });
+});
+
+// ---- zoom ----
+document.getElementById('zoomIn').onclick = ()=>{ zoom=Math.min(1.4, zoom+0.1); applyZoom(); };
+document.getElementById('zoomOut').onclick = ()=>{ zoom=Math.max(0.6, zoom-0.1); applyZoom(); };
+document.getElementById('zoomReset').onclick = ()=>{ zoom=1; applyZoom(); };
+function applyZoom(){ wrapper.style.transform = `scale(${zoom})`; }
+
+// ---- fork toast ----
+document.getElementById('forkBtn').onclick = ()=> showToast('Forked — this graph now lives in your workspace.');
+function showToast(msg, checkIcon){
+  const t = document.getElementById('toast');
+  document.getElementById('toastMsg').textContent = msg;
+  t.classList.add('show');
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(()=>t.classList.remove('show'), 2600);
+}
+
+// ---- deselect on empty canvas click ----
+canvasArea.addEventListener('pointerdown', (e)=>{
+  if(e.target===canvasArea || e.target===wrapper || e.target===edgesSvg){
+    selectNode(null, true);
+  }
+});
+
+render();
+</script>
+</body>
+</html>
