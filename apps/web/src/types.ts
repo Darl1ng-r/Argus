@@ -10,6 +10,8 @@ export interface ClaimNode {
   support: number;
   contest: number;
   steel: boolean;
+  userVote?: 'support' | 'contest' | null;
+  authorId?: string;
   createdAt: string;
 }
 
@@ -20,6 +22,13 @@ export interface Topic {
   forkCount: number;
   createdAt: string;
   nodes: ClaimNode[];
+}
+
+export interface User {
+  id: string;
+  username: string;
+  email: string;
+  reputation: number;
 }
 
 export type ViewMode = 'graph' | 'steelman' | 'diff';

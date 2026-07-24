@@ -1,18 +1,22 @@
 import React from 'react';
-import { ViewMode } from '../types';
+import { ViewMode, User } from '../types';
 
 interface HeaderProps {
   topicTitle: string;
   viewMode: ViewMode;
+  user: User | null;
   onSelectViewMode: (mode: ViewMode) => void;
   onFork: () => void;
+  onSwitchUser?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   topicTitle,
   viewMode,
+  user,
   onSelectViewMode,
-  onFork
+  onFork,
+  onSwitchUser
 }) => {
   return (
     <header>
@@ -56,6 +60,30 @@ export const Header: React.FC<HeaderProps> = ({
           </svg>
           Fork
         </button>
+
+        {user && (
+          <button
+            onClick={onSwitchUser}
+            title="Click to switch test user identity"
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: '11px',
+              fontWeight: 600,
+              background: 'var(--marble-panel)',
+              color: 'var(--ink)',
+              border: '1px solid var(--marble-line)',
+              padding: '6px 12px',
+              borderRadius: '20px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--laurel)' }}></span>
+            @{user.username}
+          </button>
+        )}
       </div>
     </header>
   );

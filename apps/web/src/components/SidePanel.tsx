@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ClaimNode, EdgeType } from '../types';
+import { ClaimNode, EdgeType, User } from '../types';
 
 const EDGE_META = {
   root: { label: 'ROOT CLAIM', color: '#B8892B' },
@@ -11,12 +11,14 @@ const EDGE_META = {
 
 interface SidePanelProps {
   selectedNode: ClaimNode | null;
+  currentUser: User | null;
   onVote: (nodeId: string, type: 'support' | 'contest') => void;
   onAddClaim: (parentId: string, edgeType: EdgeType, content: string) => void;
 }
 
 export const SidePanel: React.FC<SidePanelProps> = ({
   selectedNode,
+  currentUser,
   onVote,
   onAddClaim
 }) => {
@@ -41,6 +43,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   const total = selectedNode.support + selectedNode.contest;
   const supportPct = total > 0 ? Math.round((selectedNode.support / total) * 100) : 50;
   const contestPct = 100 - supportPct;
+
+  const userVote = selectedNode.userVote;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,18 +85,37 @@ export const SidePanel: React.FC<SidePanelProps> = ({
           </div>
         </div>
 
+        <div style={{ margin: '14px 0 6px', fontSize: '11px', color: 'var(--ink-soft)' }}>
+          {userVote ? (
+            <span>You voted: <b style={{ color: userVote === 'support' ? 'var(--support-bar)' : 'var(--contest-bar)' }}>{userVote.toUpperCase()}</b> (click again to undo)</span>
+          ) : (
+            <span>1 vote per user enforced</span>
+          )}
+        </div>
+
         <div className="vote-row">
           <button
-            className="vote-btn support"
+            className={`vote-btn support ${userVote === 'support' ? 'active-vote' : ''}`}
+            style={{
+              background: userVote === 'support' ? 'var(--support-bar)' : '#FFFDF8',
+              color: userVote === 'support' ? '#FFFDF8' : 'var(--support-bar)',
+              borderColor: 'var(--support-bar)'
+            }}
             onClick={() => onVote(selectedNode.id, 'support')}
           >
-            ▲ Support
+            {userVote === 'support' ? '✓ Supported' : '▲ Support'}
           </button>
+
           <button
-            className="vote-btn contest"
+            className={`vote-btn contest ${userVote === 'contest' ? 'active-vote' : ''}`}
+            style={{
+              background: userVote === 'contest' ? 'var(--contest-bar)' : '#FFFDF8',
+              color: userVote === 'contest' ? '#FFFDF8' : 'var(--contest-bar)',
+              borderColor: 'var(--contest-bar)'
+            }}
             onClick={() => onVote(selectedNode.id, 'contest')}
           >
-            ▼ Contest
+            {userVote === 'contest' ? '✓ Contested' : '▼ Contest'}
           </button>
         </div>
 
