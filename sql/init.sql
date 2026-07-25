@@ -1,7 +1,5 @@
 -- Argus clean schema for PostgreSQL 15+
--- Applied via docker exec psql
 
--- Enable UUID generation
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TABLE IF NOT EXISTS users (
@@ -12,7 +10,6 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Insert a default system user so seeds can reference an author
 INSERT INTO users (id, username, email)
 VALUES ('system-user-0000-0000-000000000000', 'system', 'system@argus.local')
 ON CONFLICT DO NOTHING;
@@ -70,7 +67,6 @@ CREATE TABLE IF NOT EXISTS votes (
     CONSTRAINT uq_votes_user_node UNIQUE (node_id, user_id)
 );
 
--- Indexes
 CREATE INDEX IF NOT EXISTS idx_nodes_topic_id  ON nodes(topic_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_parent_id ON nodes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_edges_from_node ON edges(from_node_id);
@@ -79,45 +75,81 @@ CREATE INDEX IF NOT EXISTS idx_edges_topic     ON edges(topic_id);
 CREATE INDEX IF NOT EXISTS idx_votes_node_id   ON votes(node_id);
 
 -- ============================================================
--- SEED: Mars vs. Earth debate topic
+-- TOPIC 1: Mars vs. Earth
 -- ============================================================
 DO $$
 DECLARE
-    v_topic_id   TEXT := 'mars-vs-earth';
-    v_author_id  TEXT := 'system-user-0000-0000-000000000000';
-    v_root_id    TEXT := 'node-root';
-    v_n1         TEXT := 'node-n1';
-    v_n2         TEXT := 'node-n2';
-    v_n3         TEXT := 'node-n3';
-    v_n4         TEXT := 'node-n4';
-    v_n1a        TEXT := 'node-n1a';
-    v_n2a        TEXT := 'node-n2a';
+    v_author_id TEXT := 'system-user-0000-0000-000000000000';
 BEGIN
-    -- Topic
     INSERT INTO topics (id, title, author_id)
-    VALUES (v_topic_id, 'Should humanity prioritize colonizing Mars over repairing Earth''s climate?', v_author_id)
+    VALUES ('mars-vs-earth', 'Should humanity prioritize colonizing Mars over repairing Earth''s climate?', v_author_id)
     ON CONFLICT DO NOTHING;
 
-    -- Root node
     INSERT INTO nodes (id, topic_id, parent_id, author_id, content, edge_type, pos_x, pos_y, support_score, contest_score, is_steel)
-    VALUES (v_root_id, v_topic_id, NULL, v_author_id,
+    VALUES ('node-root', 'mars-vs-earth', NULL, v_author_id,
         'Humanity should prioritize colonizing Mars over repairing Earth''s climate.',
         'root', 470, 40, 340, 210, TRUE)
     ON CONFLICT DO NOTHING;
 
-    -- Set root node
-    UPDATE topics SET root_node_id = v_root_id WHERE id = v_topic_id;
+    UPDATE topics SET root_node_id = 'node-root' WHERE id = 'mars-vs-earth';
 
-    -- Child nodes
     INSERT INTO nodes (id, topic_id, parent_id, author_id, content, edge_type, pos_x, pos_y, support_score, contest_score, is_steel) VALUES
-    (v_n1,  v_topic_id, v_root_id, v_author_id, 'A multi-planet species is far less likely to go extinct from any single catastrophe.', 'supports',  30, 300, 512, 88, TRUE),
-    (v_n2,  v_topic_id, v_root_id, v_author_id, 'Every dollar spent on Mars is a dollar not spent solving a crisis we already know is solvable.', 'refutes',   350, 300, 405, 140, TRUE),
-    (v_n3,  v_topic_id, v_root_id, v_author_id, 'This isn''t really either/or — space agencies are under 0.1% of relevant national budgets combined.', 'clarifies', 680, 300, 180, 30, TRUE),
-    (v_n4,  v_topic_id, v_root_id, v_author_id, 'Fixing Earth doesn''t guard against non-climate extinction risks like asteroids or supervolcanoes.', 'refutes',   1010, 300, 260, 190, FALSE),
-    (v_n1a, v_topic_id, v_n1, v_author_id, 'Mars colonies won''t be self-sufficient for at least 50 years — this is a bet on unproven timelines.', 'evidence',  30, 560, 60, 240, FALSE),
-    (v_n2a, v_topic_id, v_n2, v_author_id, 'Climate mitigation technology is proven and scaling. Mars life-support technology is not.', 'supports',  350, 560, 220, 40, TRUE)
+    ('node-n1',  'mars-vs-earth', 'node-root', v_author_id, 'A multi-planet species is far less likely to go extinct from any single catastrophe.', 'supports',  30, 300, 512, 88, TRUE),
+    ('node-n2',  'mars-vs-earth', 'node-root', v_author_id, 'Every dollar spent on Mars is a dollar not spent solving a crisis we already know is solvable.', 'refutes',   350, 300, 405, 140, TRUE),
+    ('node-n3',  'mars-vs-earth', 'node-root', v_author_id, 'This isn''t really either/or — space agencies are under 0.1% of relevant national budgets combined.', 'clarifies', 680, 300, 180, 30, TRUE),
+    ('node-n4',  'mars-vs-earth', 'node-root', v_author_id, 'Fixing Earth doesn''t guard against non-climate extinction risks like asteroids or supervolcanoes.', 'refutes',   1010, 300, 260, 190, FALSE),
+    ('node-n1a', 'mars-vs-earth', 'node-n1', v_author_id, 'Mars colonies won''t be self-sufficient for at least 50 years — this is a bet on unproven timelines.', 'evidence',  30, 560, 60, 240, FALSE),
+    ('node-n2a', 'mars-vs-earth', 'node-n2', v_author_id, 'Climate mitigation technology is proven and scaling. Mars life-support technology is not.', 'supports',  350, 560, 220, 40, TRUE)
+    ON CONFLICT DO NOTHING;
+END $$;
+
+-- ============================================================
+-- TOPIC 2: ASI Safety Pause
+-- ============================================================
+DO $$
+DECLARE
+    v_author_id TEXT := 'system-user-0000-0000-000000000000';
+BEGIN
+    INSERT INTO topics (id, title, author_id)
+    VALUES ('asi-safety-pause', 'Artificial Superintelligence development should be paused globally until formal safety proofs exist.', v_author_id)
     ON CONFLICT DO NOTHING;
 
-    -- Seed votes for support_score / contest_score
-    -- (representative sample — we just trust the stored scores directly for seed data)
+    INSERT INTO nodes (id, topic_id, parent_id, author_id, content, edge_type, pos_x, pos_y, support_score, contest_score, is_steel)
+    VALUES ('asi-root', 'asi-safety-pause', NULL, v_author_id,
+        'Artificial Superintelligence development should be paused globally until formal safety proofs exist.',
+        'root', 470, 40, 280, 95, TRUE)
+    ON CONFLICT DO NOTHING;
+
+    UPDATE topics SET root_node_id = 'asi-root' WHERE id = 'asi-safety-pause';
+
+    INSERT INTO nodes (id, topic_id, parent_id, author_id, content, edge_type, pos_x, pos_y, support_score, contest_score, is_steel) VALUES
+    ('asi-n1', 'asi-safety-pause', 'asi-root', v_author_id, 'Once an AI system surpasses human capability across all cognitive domains, containment becomes impossible.', 'supports', 30, 300, 420, 50, TRUE),
+    ('asi-n2', 'asi-safety-pause', 'asi-root', v_author_id, 'A global pause is unenforceable without totalitarian surveillance, driving development into covert military labs.', 'refutes', 380, 300, 310, 80, TRUE),
+    ('asi-n3', 'asi-safety-pause', 'asi-root', v_author_id, 'Safety research scales directly with frontier model capability — you cannot test safety without advanced models.', 'clarifies', 730, 300, 195, 40, TRUE)
+    ON CONFLICT DO NOTHING;
+END $$;
+
+-- ============================================================
+-- TOPIC 3: Universal Basic Income
+-- ============================================================
+DO $$
+DECLARE
+    v_author_id TEXT := 'system-user-0000-0000-000000000000';
+BEGIN
+    INSERT INTO topics (id, title, author_id)
+    VALUES ('ubi-vs-welfare', 'Universal Basic Income is superior to traditional targeted welfare systems.', v_author_id)
+    ON CONFLICT DO NOTHING;
+
+    INSERT INTO nodes (id, topic_id, parent_id, author_id, content, edge_type, pos_x, pos_y, support_score, contest_score, is_steel)
+    VALUES ('ubi-root', 'ubi-vs-welfare', NULL, v_author_id,
+        'Universal Basic Income is superior to traditional targeted welfare systems.',
+        'root', 470, 40, 190, 110, TRUE)
+    ON CONFLICT DO NOTHING;
+
+    UPDATE topics SET root_node_id = 'ubi-root' WHERE id = 'ubi-vs-welfare';
+
+    INSERT INTO nodes (id, topic_id, parent_id, author_id, content, edge_type, pos_x, pos_y, support_score, contest_score, is_steel) VALUES
+    ('ubi-n1', 'ubi-vs-welfare', 'ubi-root', v_author_id, 'UBI eliminates administrative overhead, welfare traps, and paternalistic means-testing bureaucracy.', 'supports', 30, 300, 340, 65, TRUE),
+    ('ubi-n2', 'ubi-vs-welfare', 'ubi-root', v_author_id, 'Giving unconditional cash to wealthy individuals diverts trillions from those living in deep poverty.', 'refutes', 380, 300, 270, 90, TRUE)
+    ON CONFLICT DO NOTHING;
 END $$;
