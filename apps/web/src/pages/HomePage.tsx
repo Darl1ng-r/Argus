@@ -8,8 +8,8 @@ export interface TopicSummary {
   rootNodeId: string;
   forkCount: number;
   createdAt: string;
-  claimCount?: number;
-  rootClaimContent?: string;
+  claimCount: number;        // Now returned directly by the API (no N+1)
+  rootClaimContent: string | null;
 }
 
 interface HomePageProps {
@@ -27,52 +27,37 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
   const [newRootClaim, setNewRootClaim] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
 
   const navigate = useNavigate();
 
-  const fetchTopics = useCallback(async () => {
+  // Fix #6 — Single API call returns enriched data; no N+1 per-topic fetches
+  const fetchTopics = useCallback(async (p = 1) => {
     setIsLoading(true);
     setErrorMsg(null);
 
     try {
-      const res = await fetch('/api/topics');
+      const res = await fetch(`/api/topics?page=${p}&limit=20`);
       if (!res.ok) {
         throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
       }
 
-      const data: TopicSummary[] = await res.json();
-
-      const enriched = await Promise.all(
-        data.map(async (t) => {
-          try {
-            const detailRes = await fetch(`/api/topics/${t.id}?depth=1`);
-            if (detailRes.ok) {
-              const detail = await detailRes.json();
-              return {
-                ...t,
-                claimCount: detail.nodes?.length || 1,
-                rootClaimContent: detail.nodes?.find((n: any) => n.edgeType === 'root')?.content || t.title
-              };
-            }
-          } catch {
-            // Ignore single topic preview fetch failure
-          }
-          return t;
-        })
-      );
-      setTopics(enriched);
-    } catch (err: any) {
+      const data: { topics: TopicSummary[]; totalPages: number; page: number } = await res.json();
+      setTopics(data.topics);
+      setTotalPages(data.totalPages);
+      setPage(data.page);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unable to connect to the Argus API server.';
       console.error('Failed to fetch topics', err);
-      setErrorMsg(
-        err.message || 'Unable to connect to the Argus API server. Please check your network connection or verify the backend server is running.'
-      );
+      setErrorMsg(msg);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchTopics();
+    fetchTopics(1);
   }, [fetchTopics]);
 
   const handleCreateTopic = async (e: React.FormEvent) => {
@@ -223,7 +208,7 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
               {errorMsg}
             </p>
             <button
-              onClick={fetchTopics}
+              onClick={() => fetchTopics(1)}
               className="fork-btn"
               style={{ background: 'var(--oxide)', margin: '0 auto' }}
             >

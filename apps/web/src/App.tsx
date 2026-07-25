@@ -1,8 +1,45 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { HomePage } from './pages/HomePage';
-import { TopicPage } from './pages/TopicPage';
 import { User } from './types';
+
+// Fix #17 — Code splitting: TopicPage (+ Cytoscape.js ~500KB) is loaded lazily
+// only when the user navigates to a topic route.
+const TopicPage = lazy(() =>
+  import('./pages/TopicPage').then((m) => ({ default: m.TopicPage }))
+);
+
+function GraphLoadingFallback() {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        flexDirection: 'column',
+        gap: '16px',
+        color: 'var(--parchment, #A89070)',
+        fontFamily: 'Inter, sans-serif',
+        fontSize: '14px',
+        background: 'var(--marble, #F8F4ED)',
+      }}
+    >
+      <div
+        style={{
+          width: '36px',
+          height: '36px',
+          borderRadius: '50%',
+          border: '3px solid var(--gold, #B8892B)',
+          borderTopColor: 'transparent',
+          animation: 'spin 0.8s linear infinite',
+        }}
+      />
+      Loading argument graph…
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -26,8 +63,8 @@ export const App: React.FC = () => {
       const res = await fetch('/api/me', {
         headers: {
           'X-User-Id': userId,
-          'X-User-Name': username || ''
-        }
+          'X-User-Name': username || '',
+        },
       });
       if (res.ok) {
         const u: User = await res.json();
@@ -51,20 +88,19 @@ export const App: React.FC = () => {
 
   return (
     <Router>
-      <Routes>
-        <Route
-          path="/"
-          element={<HomePage user={currentUser} onSwitchUser={handleSwitchUser} />}
-        />
-        <Route
-          path="/t/:topicId"
-          element={<TopicPage currentUser={currentUser} onSwitchUser={handleSwitchUser} />}
-        />
-        <Route
-          path="*"
-          element={<HomePage user={currentUser} onSwitchUser={handleSwitchUser} />}
-        />
-      </Routes>
+      <Suspense fallback={<GraphLoadingFallback />}>
+        <Routes>
+          <Route path="/" element={<HomePage user={currentUser} onSwitchUser={handleSwitchUser} />} />
+          <Route
+            path="/t/:topicId"
+            element={<TopicPage currentUser={currentUser} onSwitchUser={handleSwitchUser} />}
+          />
+          <Route
+            path="*"
+            element={<HomePage user={currentUser} onSwitchUser={handleSwitchUser} />}
+          />
+        </Routes>
+      </Suspense>
     </Router>
   );
 };

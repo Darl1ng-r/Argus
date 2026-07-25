@@ -183,17 +183,20 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     };
   }, []);
 
-  // Update Cytoscape Graph Elements on Node/ViewMode updates
+  // Fix #16 — Update Cytoscape Graph Elements with granular diffing
+  // instead of cy.json({ elements }) which replaces the entire graph
+  // and causes visual flashing + layout state loss on every update.
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
 
     cy.batch(() => {
-      // Build elements array
-      const elements: cytoscape.ElementDefinition[] = [];
+      // --- Build desired elements set ---
+      const desiredNodes = new Map<string, cytoscape.ElementDefinition>();
+      const desiredEdges = new Map<string, cytoscape.ElementDefinition>();
 
       nodes.forEach((n) => {
-        elements.push({
+        desiredNodes.set(n.id, {
           data: {
             id: n.id,
             label: n.content,
@@ -206,9 +209,10 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         });
 
         if (n.parent) {
-          elements.push({
+          const edgeId = `e_${n.parent}_${n.id}`;
+          desiredEdges.set(edgeId, {
             data: {
-              id: `e_${n.parent}_${n.id}`,
+              id: edgeId,
               source: n.parent,
               target: n.id,
               type: n.edgeType,
@@ -217,10 +221,39 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         }
       });
 
-      // Synchronize Cytoscape collection
-      cy.json({ elements });
+      // --- Remove stale elements ---
+      cy.nodes().forEach((ele) => {
+        if (!desiredNodes.has(ele.id())) cy.remove(ele);
+      });
+      cy.edges().forEach((ele) => {
+        if (!desiredEdges.has(ele.id())) cy.remove(ele);
+      });
 
-      // Apply Steelman Mode classes
+      // --- Add new elements / update data on existing ones ---
+      desiredNodes.forEach((def, id) => {
+        const existing = cy.getElementById(id);
+        if (existing.length === 0) {
+          cy.add({ group: 'nodes', ...def });
+        } else {
+          // Update data in-place (avoids layout disruption)
+          existing.data(def.data);
+          // Only move if position changed significantly (avoids jitter from user drags)
+          const cur = existing.position();
+          const dx = Math.abs(cur.x - (def.position?.x ?? cur.x));
+          const dy = Math.abs(cur.y - (def.position?.y ?? cur.y));
+          if (dx > 1 || dy > 1) {
+            existing.position(def.position as { x: number; y: number });
+          }
+        }
+      });
+
+      desiredEdges.forEach((def, id) => {
+        if (cy.getElementById(id).length === 0) {
+          cy.add({ group: 'edges', ...def });
+        }
+      });
+
+      // --- Apply Steelman mode classes ---
       if (viewMode === 'steelman') {
         cy.nodes().forEach((ele) => {
           const isSteel = ele.data('steel');
@@ -235,11 +268,11 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         cy.nodes().removeClass('dimmed');
       }
 
-      // Selection state
+      // --- Selection state ---
       cy.nodes().unselect();
       if (selectedId) {
         const sel = cy.getElementById(selectedId);
-        if (sel) {
+        if (sel.length > 0) {
           sel.select();
           cy.animate({
             center: { eles: sel },

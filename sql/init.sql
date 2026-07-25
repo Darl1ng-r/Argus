@@ -4,6 +4,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TABLE IF NOT EXISTS users (
     id         TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    clerk_id   TEXT UNIQUE,
     username   VARCHAR(50)  UNIQUE NOT NULL,
     email      VARCHAR(255) UNIQUE NOT NULL,
     reputation INT NOT NULL DEFAULT 0,
@@ -67,12 +68,45 @@ CREATE TABLE IF NOT EXISTS votes (
     CONSTRAINT uq_votes_user_node UNIQUE (node_id, user_id)
 );
 
+-- Basic traversal indexes
 CREATE INDEX IF NOT EXISTS idx_nodes_topic_id  ON nodes(topic_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_parent_id ON nodes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_edges_from_node ON edges(from_node_id);
 CREATE INDEX IF NOT EXISTS idx_edges_to_node   ON edges(to_node_id);
 CREATE INDEX IF NOT EXISTS idx_edges_topic     ON edges(topic_id);
 CREATE INDEX IF NOT EXISTS idx_votes_node_id   ON votes(node_id);
+
+-- Fix #14 — Composite & partial indexes for production query patterns
+
+-- Subgraph recursive CTE: filters by topic_id + status on every level
+CREATE INDEX IF NOT EXISTS idx_nodes_topic_status
+    ON nodes(topic_id, status);
+
+-- Subgraph traversal: join on parent_id scoped to topic
+CREATE INDEX IF NOT EXISTS idx_nodes_topic_parent
+    ON nodes(topic_id, parent_id);
+
+-- Partial index: ACTIVE nodes only (eliminates status filter overhead)
+CREATE INDEX IF NOT EXISTS idx_nodes_active
+    ON nodes(topic_id, parent_id)
+    WHERE status = 'ACTIVE';
+
+-- getAllTopics sort (created_at DESC is used on every topic list query)
+CREATE INDEX IF NOT EXISTS idx_topics_created_at
+    ON topics(created_at DESC);
+
+-- Vote lookup scoped to node+user (supports toggle-vote & unique constraint)
+CREATE INDEX IF NOT EXISTS idx_votes_node_user
+    ON votes(node_id, user_id);
+
+-- Vote lookup scoped to user (for topiced vote map query)
+CREATE INDEX IF NOT EXISTS idx_votes_user_id
+    ON votes(user_id);
+
+-- Clerk auth lookup
+CREATE INDEX IF NOT EXISTS idx_users_clerk_id
+    ON users(clerk_id)
+    WHERE clerk_id IS NOT NULL;
 
 -- ============================================================
 -- TOPIC 1: Mars vs. Earth

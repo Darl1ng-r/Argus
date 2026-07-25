@@ -7,9 +7,11 @@ dist/
 build/
 out/
 
-# Environment files
+# Environment files — never commit secrets
 .env
-.env.*
+.env.local
+.env.*.local
+# .env.example IS committed — it documents required variables
 !.env.example
 
 # Tooling / Analysis outputs

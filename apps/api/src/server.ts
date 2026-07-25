@@ -1,9 +1,14 @@
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { RedisStore } from 'rate-limit-redis';
+import pinoHttp from 'pino-http';
+import pino from 'pino';
 import { verifyToken } from '@clerk/backend';
 import { testConnection } from './db.js';
+import { redisClient } from './redis.js';
 import {
   getTopic,
   getTopicSubgraph,
@@ -25,142 +30,246 @@ import {
   ValidationError,
 } from './utils/sanitizer.js';
 
+// -----------------------------------------------------------------------
+// Structured Logger (Fix #4b — Pino replaces bare console.log)
+// -----------------------------------------------------------------------
+export const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  ...(process.env.NODE_ENV !== 'production' && {
+    transport: { target: 'pino-pretty', options: { colorize: true } },
+  }),
+});
+
 declare global {
   namespace Express {
     interface Request {
       user?: User;
+      requestId?: string;
     }
   }
 }
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
+// -----------------------------------------------------------------------
+// Fix #11 — Security Headers via Helmet
+// -----------------------------------------------------------------------
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'"],
+        fontSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        upgradeInsecureRequests: IS_PRODUCTION ? [] : null,
+      },
+    },
+    hsts: IS_PRODUCTION ? { maxAge: 31_536_000, includeSubDomains: true, preload: true } : false,
+  })
+);
+
+// -----------------------------------------------------------------------
+// Request Logging (Pino-HTTP)
+// -----------------------------------------------------------------------
+app.use(
+  pinoHttp({
+    logger,
+    customLogLevel(_req, res) {
+      if (res.statusCode >= 500) return 'error';
+      if (res.statusCode >= 400) return 'warn';
+      return 'info';
+    },
+    // Don't log health check spam
+    autoLogging: { ignore: (req) => req.url === '/health' },
+  })
+);
+
+// -----------------------------------------------------------------------
 // CORS Security Configuration
-const allowedOrigins = [
-  process.env.CORS_ORIGIN || 'http://localhost:5173',
-  'http://127.0.0.1:5173',
-];
+// -----------------------------------------------------------------------
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173')
+  .split(',')
+  .map((o) => o.trim());
 
 app.use(
   cors({
     origin: (origin, callback) => {
+      // Allow requests with no origin (same-origin, curl, health checks)
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(new ValidationError(`CORS blocked request from origin: ${origin}`));
+        callback(new ValidationError(`CORS blocked: ${origin}`));
       }
     },
     credentials: true,
   })
 );
 
-app.use(express.json({ limit: '100kb' }));
+app.use(express.json({ limit: '50kb' }));
 
 // -----------------------------------------------------------------------
-// API Rate Limiting Configuration
-// Solves attack surface: DDoS prevention, brute-force spamming, resource exhaustion
+// Fix #3 — Distributed Rate Limiting via Redis (graceful fallback to memory)
 // -----------------------------------------------------------------------
+function makeStore() {
+  if (redisClient) {
+    return new RedisStore({
+      // @ts-expect-error — ioredis satisfies the interface
+      sendCommand: (...args: string[]) => redisClient!.call(...args),
+    });
+  }
+  // Memory store fallback (dev only)
+  return undefined;
+}
 
-// General API rate limiter (100 requests per 1 min window)
 const globalLimiter = rateLimit({
-  windowMs: 60 * 1000,
+  windowMs: 60_000,
   max: 100,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Too many requests. Please slow down and try again later.' },
+  store: makeStore(),
+  message: { error: 'Too many requests. Please slow down.' },
 });
 
-// Mutation rate limiter for creating topics/claims/forks (15 requests per 1 min window)
+// Stricter limits for state-mutating endpoints
 const mutationLimiter = rateLimit({
-  windowMs: 60 * 1000,
+  windowMs: 60_000,
   max: 15,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Too many claims or topics created. Please wait a minute before submitting again.' },
+  store: makeStore(),
+  message: { error: 'Too many submissions. Please wait a minute before trying again.' },
 });
 
-// Voting rate limiter (30 votes per 1 min window)
 const voteLimiter = rateLimit({
-  windowMs: 60 * 1000,
+  windowMs: 60_000,
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Voting speed limit exceeded. Please wait a moment before voting again.' },
+  store: makeStore(),
+  message: { error: 'Voting speed limit exceeded. Please wait before voting again.' },
 });
 
 app.use(globalLimiter);
 
 // -----------------------------------------------------------------------
-// Authentication Middleware
+// Fix #1 — Authentication Middleware
+// - Reads Clerk JWT (Bearer token) ONLY — no custom header forgery
+// - In dev mode (ALLOW_DEV_AUTH=true), also accepts X-User-Id/X-User-Name
+//   so the existing dev flow still works without a Clerk account
 // -----------------------------------------------------------------------
+const ALLOW_DEV_AUTH = process.env.ALLOW_DEV_AUTH === 'true' && !IS_PRODUCTION;
+
 app.use(async (req: Request, _res: Response, next: NextFunction) => {
   try {
     const authHeader = req.headers['authorization'];
-    const customUserId = req.headers['x-user-id'];
-    const customUserName = req.headers['x-user-name'];
-
-    let resolvedId = 'system-user-0000-0000-000000000000';
+    let resolvedId: string | undefined;
     let resolvedUsername: string | undefined;
     let resolvedEmail: string | undefined;
 
+    // --- Clerk JWT path ---
     if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
       const token = authHeader.replace('Bearer ', '').trim();
       const secretKey = process.env.CLERK_SECRET_KEY;
-
       if (secretKey) {
         try {
-          const verifiedPayload = await verifyToken(token, { secretKey });
-          if (verifiedPayload && verifiedPayload.sub) {
-            resolvedId = verifiedPayload.sub;
+          const payload = await verifyToken(token, { secretKey });
+          if (payload?.sub) {
+            resolvedId = payload.sub;
           }
-        } catch {
-          // Fallback to custom header token
+        } catch (err) {
+          // JWT invalid/expired — do NOT fall through to dev auth in production
+          if (IS_PRODUCTION) {
+            req.log.warn({ err }, '[AUTH] Invalid JWT token');
+          }
         }
       }
     }
 
-    if (resolvedId === 'system-user-0000-0000-000000000000' && typeof customUserId === 'string' && customUserId.trim()) {
-      resolvedId = customUserId.trim();
+    // --- Dev auth path (only when ALLOW_DEV_AUTH=true and not production) ---
+    if (!resolvedId && ALLOW_DEV_AUTH) {
+      const customUserId = req.headers['x-user-id'];
+      const customUserName = req.headers['x-user-name'];
+      if (typeof customUserId === 'string' && customUserId.trim()) {
+        resolvedId = customUserId.trim();
+      }
+      if (typeof customUserName === 'string' && customUserName.trim()) {
+        resolvedUsername = customUserName.trim();
+      }
     }
 
-    if (typeof customUserName === 'string' && customUserName.trim()) {
-      resolvedUsername = customUserName.trim();
+    if (resolvedId) {
+      req.user = await getOrCreateUser(resolvedId, resolvedUsername, resolvedEmail);
     }
-
-    req.user = await getOrCreateUser(resolvedId, resolvedUsername, resolvedEmail);
+    // No resolved ID → req.user remains undefined (anonymous read access)
     next();
   } catch (err) {
-    console.error('[AUTH] Failed to resolve user session:', err);
+    req.log.error({ err }, '[AUTH] Failed to resolve user session');
     next();
   }
 });
 
-// Health check
+// -----------------------------------------------------------------------
+// Fix #2 — requireAuth middleware guards all mutation routes
+// -----------------------------------------------------------------------
+function requireAuth(req: Request, res: Response, next: NextFunction) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  next();
+}
+
+// -----------------------------------------------------------------------
+// Fix #21 — Generic error sender (prevents leaking internal details)
+// -----------------------------------------------------------------------
+function sendError(res: Response, status: number, message: string, internalErr?: unknown) {
+  if (internalErr) {
+    logger.error({ err: internalErr }, message);
+  }
+  // In production, never expose raw error messages for 5xx
+  const clientMessage =
+    status >= 500 && IS_PRODUCTION ? 'An internal error occurred. Please try again.' : message;
+  return res.status(status).json({ error: clientMessage });
+}
+
+// -----------------------------------------------------------------------
+// Routes
+// -----------------------------------------------------------------------
+
+// Health check — public, not rate limited
 app.get('/health', async (_req: Request, res: Response) => {
   try {
     const { db } = await import('./db.js');
     await db.query('SELECT 1');
     res.json({ status: 'ok', db: 'connected', timestamp: new Date().toISOString() });
-  } catch {
+  } catch (err) {
     res.status(503).json({ status: 'error', db: 'disconnected' });
   }
 });
 
-// GET /api/me
+// GET /api/me — public, returns authenticated user if any
 app.get('/api/me', (req: Request, res: Response) => {
   if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
   res.json(req.user);
 });
 
-// GET /api/topics
-app.get('/api/topics', async (_req: Request, res: Response) => {
+// GET /api/topics — public, Cache-Control for CDN/browser
+app.get('/api/topics', async (req: Request, res: Response) => {
   try {
-    const topics = await getAllTopics();
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10));
+    const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit || '20'), 10)));
+    const topics = await getAllTopics(page, limit);
+
+    // Fix — add cache headers for public GET endpoints
+    res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=30');
     res.json(topics);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+  } catch (err) {
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
   }
 });
 
@@ -169,18 +278,19 @@ app.get('/api/topics/:id', async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
     const depth = req.query.depth ? parseInt(String(req.query.depth), 10) : 2;
-    const fromNodeId = req.query.fromNodeId ? validateIdentifier(String(req.query.fromNodeId), 'fromNodeId') : undefined;
+    const fromNodeId = req.query.fromNodeId
+      ? validateIdentifier(String(req.query.fromNodeId), 'fromNodeId')
+      : undefined;
 
     const currentUserId = req.user?.id;
     const topic = await getTopicSubgraph(topicId, fromNodeId, Math.min(depth, 10), currentUserId);
     if (!topic) return res.status(404).json({ error: 'Topic not found' });
+
+    res.set('Cache-Control', 'public, max-age=10, stale-while-revalidate=20');
     res.json(topic);
-  } catch (err: unknown) {
-    if (err instanceof ValidationError) {
-      return res.status(400).json({ error: err.message });
-    }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
   }
 });
 
@@ -194,75 +304,74 @@ app.get('/api/topics/:id/subgraph', async (req: Request, res: Response) => {
     const currentUserId = req.user?.id;
     const subgraph = await getTopicSubgraph(topicId, fromNodeId, Math.min(depth, 5), currentUserId);
     if (!subgraph) return res.status(404).json({ error: 'Topic or node not found' });
+
+    res.set('Cache-Control', 'public, max-age=5, stale-while-revalidate=10');
     res.json(subgraph);
-  } catch (err: unknown) {
-    if (err instanceof ValidationError) {
-      return res.status(400).json({ error: err.message });
-    }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
   }
 });
 
-// POST /api/topics (Protected by Mutation Rate Limiter)
-app.post('/api/topics', mutationLimiter, async (req: Request, res: Response) => {
+// POST /api/topics — Fix #2: requireAuth applied
+app.post('/api/topics', requireAuth, mutationLimiter, async (req: Request, res: Response) => {
   try {
     const { title, rootClaim } = req.body as { title?: unknown; rootClaim?: unknown };
     const sanitizedTitle = sanitizeTopicTitle(title);
     const sanitizedRootClaim = sanitizeClaimContent(rootClaim);
 
-    const authorId = req.user?.id || 'system-user-0000-0000-000000000000';
-    const topic = await createTopic(sanitizedTitle, sanitizedRootClaim, authorId);
+    const topic = await createTopic(sanitizedTitle, sanitizedRootClaim, req.user!.id);
     res.status(201).json(topic);
-  } catch (err: unknown) {
-    if (err instanceof ValidationError) {
-      return res.status(400).json({ error: err.message });
-    }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
   }
 });
 
-// POST /api/topics/:id/nodes (Protected by Mutation Rate Limiter)
-app.post('/api/topics/:id/nodes', mutationLimiter, async (req: Request, res: Response) => {
-  try {
-    const topicId = validateIdentifier(req.params.id, 'topicId');
-    const { parentId, edgeType, content } = req.body as {
-      parentId?: unknown;
-      edgeType?: unknown;
-      content?: unknown;
-    };
+// POST /api/topics/:id/nodes — Fix #2: requireAuth applied
+app.post(
+  '/api/topics/:id/nodes',
+  requireAuth,
+  mutationLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const topicId = validateIdentifier(req.params.id, 'topicId');
+      const { parentId, edgeType, content } = req.body as {
+        parentId?: unknown;
+        edgeType?: unknown;
+        content?: unknown;
+      };
 
-    const sanitizedParentId = validateIdentifier(parentId, 'parentId');
-    const validatedEdgeType = validateEdgeType(edgeType);
-    const sanitizedContent = sanitizeClaimContent(content);
+      const sanitizedParentId = validateIdentifier(parentId, 'parentId');
+      const validatedEdgeType = validateEdgeType(edgeType);
+      const sanitizedContent = sanitizeClaimContent(content);
 
-    const wouldCycle = await detectCycle(topicId, sanitizedParentId);
-    if (wouldCycle) {
-      throw new ValidationError(
-        'Circular reasoning blocked: connecting these claims creates a cycle. Argus argument graphs must be Directed Acyclic Graphs (DAGs).'
+      // Note: a brand-new leaf node cannot create a cycle since it has no
+      // outgoing edges. Cycle detection here is a safety check for edge
+      // rearrangement, which isn't supported in the current API.
+      const wouldCycle = await detectCycle(topicId, sanitizedParentId);
+      if (wouldCycle) {
+        throw new ValidationError(
+          'Circular reasoning blocked: connecting these claims creates a cycle.'
+        );
+      }
+
+      const newNode = await addClaimNode(
+        topicId,
+        sanitizedParentId,
+        req.user!.id,
+        validatedEdgeType,
+        sanitizedContent
       );
+      res.status(201).json(newNode);
+    } catch (err) {
+      if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+      sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
     }
-
-    const authorId = req.user?.id || 'system-user-0000-0000-000000000000';
-    const newNode = await addClaimNode(
-      topicId,
-      sanitizedParentId,
-      authorId,
-      validatedEdgeType,
-      sanitizedContent
-    );
-    res.status(201).json(newNode);
-  } catch (err: unknown) {
-    if (err instanceof ValidationError) {
-      return res.status(400).json({ error: err.message });
-    }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
   }
-});
+);
 
-// GET /api/topics/:id/cycle-check
+// GET /api/topics/:id/cycle-check — public utility endpoint
 app.get('/api/topics/:id/cycle-check', async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
@@ -277,61 +386,59 @@ app.get('/api/topics/:id/cycle-check', async (req: Request, res: Response) => {
 
     const wouldCycle = await detectCycle(topicId, sParent, sChild);
     res.json({ wouldCycle, parentId: sParent, childId: sChild });
-  } catch (err: unknown) {
-    if (err instanceof ValidationError) {
-      return res.status(400).json({ error: err.message });
-    }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
   }
 });
 
-// POST /api/topics/:id/nodes/:nodeId/vote (Protected by Voting Rate Limiter)
-app.post('/api/topics/:id/nodes/:nodeId/vote', voteLimiter, async (req: Request, res: Response) => {
-  try {
-    const topicId = validateIdentifier(req.params.id, 'topicId');
-    const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
-    const { voteType } = req.body as { voteType?: unknown };
+// POST /api/topics/:id/nodes/:nodeId/vote — Fix #2: requireAuth applied
+app.post(
+  '/api/topics/:id/nodes/:nodeId/vote',
+  requireAuth,
+  voteLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const topicId = validateIdentifier(req.params.id, 'topicId');
+      const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
+      const { voteType } = req.body as { voteType?: unknown };
 
-    const validatedVoteType = validateVoteType(voteType);
-    const userId = req.user?.id || 'system-user-0000-0000-000000000000';
-
-    const updatedNode = await voteNode(topicId, nodeId, userId, validatedVoteType);
-    res.json(updatedNode);
-  } catch (err: unknown) {
-    if (err instanceof ValidationError) {
-      return res.status(400).json({ error: err.message });
+      const validatedVoteType = validateVoteType(voteType);
+      const updatedNode = await voteNode(topicId, nodeId, req.user!.id, validatedVoteType);
+      res.json(updatedNode);
+    } catch (err) {
+      if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+      sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
     }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
   }
-});
+);
 
-// POST /api/topics/:id/fork (Protected by Mutation Rate Limiter)
-app.post('/api/topics/:id/fork', mutationLimiter, async (req: Request, res: Response) => {
+// POST /api/topics/:id/fork — Fix #2: requireAuth applied
+app.post('/api/topics/:id/fork', requireAuth, mutationLimiter, async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
-    const authorId = req.user?.id || 'system-user-0000-0000-000000000000';
-    const forked = await forkTopic(topicId, authorId);
+    const forked = await forkTopic(topicId, req.user!.id);
     res.status(201).json(forked);
-  } catch (err: unknown) {
-    if (err instanceof ValidationError) {
-      return res.status(400).json({ error: err.message });
-    }
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
   }
 });
 
+// -----------------------------------------------------------------------
 // Bootstrap
+// -----------------------------------------------------------------------
 async function bootstrap() {
   await testConnection();
   app.listen(PORT, () => {
-    console.log(`[ARGUS API] Listening on port ${PORT}`);
+    logger.info(`[ARGUS API] Listening on port ${PORT} (${IS_PRODUCTION ? 'production' : 'development'})`);
+    if (ALLOW_DEV_AUTH) {
+      logger.warn('[ARGUS API] ALLOW_DEV_AUTH=true — X-User-Id header auth is enabled. Never use in production!');
+    }
   });
 }
 
 bootstrap().catch((err) => {
-  console.error('[ARGUS API] Failed to start:', err);
+  logger.error({ err }, '[ARGUS API] Fatal startup error');
   process.exit(1);
 });
