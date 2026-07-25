@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import { verifyToken } from '@clerk/backend';
 import { testConnection } from './db.js';
 import {
@@ -57,10 +58,41 @@ app.use(
 app.use(express.json({ limit: '100kb' }));
 
 // -----------------------------------------------------------------------
-// Authentication Middleware (Clerk JWT Verification + Dev Session Fallback)
-// 1. Verifies incoming Clerk Session JWT if Authorization: Bearer <token> present
-// 2. Provisions or looks up user row in PostgreSQL by clerk_id / user_id
-// 3. Fallback to X-User-Id header for seamless local dev / testing
+// API Rate Limiting Configuration
+// Solves attack surface: DDoS prevention, brute-force spamming, resource exhaustion
+// -----------------------------------------------------------------------
+
+// General API rate limiter (100 requests per 1 min window)
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down and try again later.' },
+});
+
+// Mutation rate limiter for creating topics/claims/forks (15 requests per 1 min window)
+const mutationLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many claims or topics created. Please wait a minute before submitting again.' },
+});
+
+// Voting rate limiter (30 votes per 1 min window)
+const voteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Voting speed limit exceeded. Please wait a moment before voting again.' },
+});
+
+app.use(globalLimiter);
+
+// -----------------------------------------------------------------------
+// Authentication Middleware
 // -----------------------------------------------------------------------
 app.use(async (req: Request, _res: Response, next: NextFunction) => {
   try {
@@ -72,7 +104,6 @@ app.use(async (req: Request, _res: Response, next: NextFunction) => {
     let resolvedUsername: string | undefined;
     let resolvedEmail: string | undefined;
 
-    // Check for Clerk JWT Bearer Token
     if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
       const token = authHeader.replace('Bearer ', '').trim();
       const secretKey = process.env.CLERK_SECRET_KEY;
@@ -81,15 +112,14 @@ app.use(async (req: Request, _res: Response, next: NextFunction) => {
         try {
           const verifiedPayload = await verifyToken(token, { secretKey });
           if (verifiedPayload && verifiedPayload.sub) {
-            resolvedId = verifiedPayload.sub; // Clerk User ID (e.g. user_2b...)
+            resolvedId = verifiedPayload.sub;
           }
         } catch {
-          // If Clerk verification fails, fallback to custom header token
+          // Fallback to custom header token
         }
       }
     }
 
-    // Fallback to X-User-Id header if not resolved via Clerk JWT
     if (resolvedId === 'system-user-0000-0000-000000000000' && typeof customUserId === 'string' && customUserId.trim()) {
       resolvedId = customUserId.trim();
     }
@@ -117,7 +147,7 @@ app.get('/health', async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/me - Active user session profile
+// GET /api/me
 app.get('/api/me', (req: Request, res: Response) => {
   if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
   res.json(req.user);
@@ -174,8 +204,8 @@ app.get('/api/topics/:id/subgraph', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/topics
-app.post('/api/topics', async (req: Request, res: Response) => {
+// POST /api/topics (Protected by Mutation Rate Limiter)
+app.post('/api/topics', mutationLimiter, async (req: Request, res: Response) => {
   try {
     const { title, rootClaim } = req.body as { title?: unknown; rootClaim?: unknown };
     const sanitizedTitle = sanitizeTopicTitle(title);
@@ -193,8 +223,8 @@ app.post('/api/topics', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/topics/:id/nodes
-app.post('/api/topics/:id/nodes', async (req: Request, res: Response) => {
+// POST /api/topics/:id/nodes (Protected by Mutation Rate Limiter)
+app.post('/api/topics/:id/nodes', mutationLimiter, async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
     const { parentId, edgeType, content } = req.body as {
@@ -256,8 +286,8 @@ app.get('/api/topics/:id/cycle-check', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/topics/:id/nodes/:nodeId/vote
-app.post('/api/topics/:id/nodes/:nodeId/vote', async (req: Request, res: Response) => {
+// POST /api/topics/:id/nodes/:nodeId/vote (Protected by Voting Rate Limiter)
+app.post('/api/topics/:id/nodes/:nodeId/vote', voteLimiter, async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
     const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
@@ -277,8 +307,8 @@ app.post('/api/topics/:id/nodes/:nodeId/vote', async (req: Request, res: Respons
   }
 });
 
-// POST /api/topics/:id/fork
-app.post('/api/topics/:id/fork', async (req: Request, res: Response) => {
+// POST /api/topics/:id/fork (Protected by Mutation Rate Limiter)
+app.post('/api/topics/:id/fork', mutationLimiter, async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
     const authorId = req.user?.id || 'system-user-0000-0000-000000000000';
