@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import { verifyToken } from '@clerk/backend';
 import { testConnection } from './db.js';
 import {
   getTopic,
@@ -55,22 +56,49 @@ app.use(
 
 app.use(express.json({ limit: '100kb' }));
 
-// Authentication Middleware
+// -----------------------------------------------------------------------
+// Authentication Middleware (Clerk JWT Verification + Dev Session Fallback)
+// 1. Verifies incoming Clerk Session JWT if Authorization: Bearer <token> present
+// 2. Provisions or looks up user row in PostgreSQL by clerk_id / user_id
+// 3. Fallback to X-User-Id header for seamless local dev / testing
+// -----------------------------------------------------------------------
 app.use(async (req: Request, _res: Response, next: NextFunction) => {
   try {
-    const rawHeader = req.headers['x-user-id'] || req.headers['authorization'];
-    let userId = 'system-user-0000-0000-000000000000';
-    let username: string | undefined;
+    const authHeader = req.headers['authorization'];
+    const customUserId = req.headers['x-user-id'];
+    const customUserName = req.headers['x-user-name'];
 
-    if (typeof rawHeader === 'string' && rawHeader.trim()) {
-      userId = rawHeader.replace('Bearer ', '').trim();
+    let resolvedId = 'system-user-0000-0000-000000000000';
+    let resolvedUsername: string | undefined;
+    let resolvedEmail: string | undefined;
+
+    // Check for Clerk JWT Bearer Token
+    if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.replace('Bearer ', '').trim();
+      const secretKey = process.env.CLERK_SECRET_KEY;
+
+      if (secretKey) {
+        try {
+          const verifiedPayload = await verifyToken(token, { secretKey });
+          if (verifiedPayload && verifiedPayload.sub) {
+            resolvedId = verifiedPayload.sub; // Clerk User ID (e.g. user_2b...)
+          }
+        } catch {
+          // If Clerk verification fails, fallback to custom header token
+        }
+      }
     }
 
-    if (req.headers['x-user-name'] && typeof req.headers['x-user-name'] === 'string') {
-      username = req.headers['x-user-name'].trim();
+    // Fallback to X-User-Id header if not resolved via Clerk JWT
+    if (resolvedId === 'system-user-0000-0000-000000000000' && typeof customUserId === 'string' && customUserId.trim()) {
+      resolvedId = customUserId.trim();
     }
 
-    req.user = await getOrCreateUser(userId, username);
+    if (typeof customUserName === 'string' && customUserName.trim()) {
+      resolvedUsername = customUserName.trim();
+    }
+
+    req.user = await getOrCreateUser(resolvedId, resolvedUsername, resolvedEmail);
     next();
   } catch (err) {
     console.error('[AUTH] Failed to resolve user session:', err);
@@ -89,7 +117,7 @@ app.get('/health', async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/me
+// GET /api/me - Active user session profile
 app.get('/api/me', (req: Request, res: Response) => {
   if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
   res.json(req.user);
@@ -106,11 +134,11 @@ app.get('/api/topics', async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/topics/:id - Fetch topic with depth-limiting & subgraph pagination support
+// GET /api/topics/:id
 app.get('/api/topics/:id', async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
-    const depth = req.query.depth ? parseInt(String(req.query.depth), 10) : 2; // Default to 2-hop subgraph depth
+    const depth = req.query.depth ? parseInt(String(req.query.depth), 10) : 2;
     const fromNodeId = req.query.fromNodeId ? validateIdentifier(String(req.query.fromNodeId), 'fromNodeId') : undefined;
 
     const currentUserId = req.user?.id;
@@ -126,7 +154,7 @@ app.get('/api/topics/:id', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/topics/:id/subgraph - Lazy load deeper hops on demand
+// GET /api/topics/:id/subgraph
 app.get('/api/topics/:id/subgraph', async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');

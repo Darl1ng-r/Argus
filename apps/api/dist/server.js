@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
+const backend_1 = require("@clerk/backend");
 const db_js_1 = require("./db.js");
 const graphService_js_1 = require("./services/graphService.js");
 const sanitizer_js_1 = require("./utils/sanitizer.js");
@@ -28,19 +29,44 @@ app.use((0, cors_1.default)({
     credentials: true,
 }));
 app.use(express_1.default.json({ limit: '100kb' }));
-// Authentication Middleware
+// -----------------------------------------------------------------------
+// Authentication Middleware (Clerk JWT Verification + Dev Session Fallback)
+// 1. Verifies incoming Clerk Session JWT if Authorization: Bearer <token> present
+// 2. Provisions or looks up user row in PostgreSQL by clerk_id / user_id
+// 3. Fallback to X-User-Id header for seamless local dev / testing
+// -----------------------------------------------------------------------
 app.use(async (req, _res, next) => {
     try {
-        const rawHeader = req.headers['x-user-id'] || req.headers['authorization'];
-        let userId = 'system-user-0000-0000-000000000000';
-        let username;
-        if (typeof rawHeader === 'string' && rawHeader.trim()) {
-            userId = rawHeader.replace('Bearer ', '').trim();
+        const authHeader = req.headers['authorization'];
+        const customUserId = req.headers['x-user-id'];
+        const customUserName = req.headers['x-user-name'];
+        let resolvedId = 'system-user-0000-0000-000000000000';
+        let resolvedUsername;
+        let resolvedEmail;
+        // Check for Clerk JWT Bearer Token
+        if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+            const token = authHeader.replace('Bearer ', '').trim();
+            const secretKey = process.env.CLERK_SECRET_KEY;
+            if (secretKey) {
+                try {
+                    const verifiedPayload = await (0, backend_1.verifyToken)(token, { secretKey });
+                    if (verifiedPayload && verifiedPayload.sub) {
+                        resolvedId = verifiedPayload.sub; // Clerk User ID (e.g. user_2b...)
+                    }
+                }
+                catch {
+                    // If Clerk verification fails, fallback to custom header token
+                }
+            }
         }
-        if (req.headers['x-user-name'] && typeof req.headers['x-user-name'] === 'string') {
-            username = req.headers['x-user-name'].trim();
+        // Fallback to X-User-Id header if not resolved via Clerk JWT
+        if (resolvedId === 'system-user-0000-0000-000000000000' && typeof customUserId === 'string' && customUserId.trim()) {
+            resolvedId = customUserId.trim();
         }
-        req.user = await (0, graphService_js_1.getOrCreateUser)(userId, username);
+        if (typeof customUserName === 'string' && customUserName.trim()) {
+            resolvedUsername = customUserName.trim();
+        }
+        req.user = await (0, graphService_js_1.getOrCreateUser)(resolvedId, resolvedUsername, resolvedEmail);
         next();
     }
     catch (err) {
@@ -59,7 +85,7 @@ app.get('/health', async (_req, res) => {
         res.status(503).json({ status: 'error', db: 'disconnected' });
     }
 });
-// GET /api/me
+// GET /api/me - Active user session profile
 app.get('/api/me', (req, res) => {
     if (!req.user)
         return res.status(401).json({ error: 'Unauthenticated' });
@@ -76,11 +102,11 @@ app.get('/api/topics', async (_req, res) => {
         res.status(500).json({ error: message });
     }
 });
-// GET /api/topics/:id - Fetch topic with depth-limiting & subgraph pagination support
+// GET /api/topics/:id
 app.get('/api/topics/:id', async (req, res) => {
     try {
         const topicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'topicId');
-        const depth = req.query.depth ? parseInt(String(req.query.depth), 10) : 2; // Default to 2-hop subgraph depth
+        const depth = req.query.depth ? parseInt(String(req.query.depth), 10) : 2;
         const fromNodeId = req.query.fromNodeId ? (0, sanitizer_js_1.validateIdentifier)(String(req.query.fromNodeId), 'fromNodeId') : undefined;
         const currentUserId = req.user?.id;
         const topic = await (0, graphService_js_1.getTopicSubgraph)(topicId, fromNodeId, Math.min(depth, 10), currentUserId);
@@ -96,7 +122,7 @@ app.get('/api/topics/:id', async (req, res) => {
         res.status(500).json({ error: message });
     }
 });
-// GET /api/topics/:id/subgraph - Lazy load deeper hops on demand
+// GET /api/topics/:id/subgraph
 app.get('/api/topics/:id/subgraph', async (req, res) => {
     try {
         const topicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'topicId');

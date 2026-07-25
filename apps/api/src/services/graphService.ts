@@ -14,7 +14,7 @@ export interface ClaimNode {
   userVote?: 'support' | 'contest' | null;
   authorId: string;
   createdAt: string;
-  hasMoreChildren?: boolean; // Indicates if node has un-fetched deeper children
+  hasMoreChildren?: boolean;
 }
 
 export interface Topic {
@@ -28,32 +28,53 @@ export interface Topic {
 
 export interface User {
   id: string;
+  clerkId?: string;
   username: string;
   email: string;
   reputation: number;
 }
 
-export async function getOrCreateUser(userId?: string, username?: string): Promise<User> {
-  const id = userId || 'system-user-0000-0000-000000000000';
-  const name = username || (id === 'system-user-0000-0000-000000000000' ? 'system' : `User_${id.slice(0, 6)}`);
-  const email = `${name.toLowerCase()}@argus.local`;
+// -----------------------------------------------------------------------
+// Get or Provision User from Clerk Session or Dev Session
+// -----------------------------------------------------------------------
+export async function getOrCreateUser(
+  userIdOrClerkId?: string,
+  username?: string,
+  email?: string
+): Promise<User> {
+  const inputId = userIdOrClerkId || 'system-user-0000-0000-000000000000';
+  const isClerkId = inputId.startsWith('user_');
 
+  // Look up existing user by ID or clerk_id
   const existing = await db.query<User>(
-    'SELECT id, username, email, reputation FROM users WHERE id = $1',
-    [id]
+    'SELECT id, clerk_id AS "clerkId", username, email, reputation FROM users WHERE id = $1 OR clerk_id = $1',
+    [inputId]
   );
 
   if (existing.rowCount! > 0) {
     return existing.rows[0];
   }
 
-  const created = await db.query<User>(
-    `INSERT INTO users (id, username, email, reputation)
-     VALUES ($1, $2, $3, 10)
-     ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username
-     RETURNING id, username, email, reputation`,
-    [id, name, email]
-  );
+  const name = username || (inputId === 'system-user-0000-0000-000000000000' ? 'system' : `User_${inputId.slice(-6)}`);
+  const userEmail = email || `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}@argus.local`;
+
+  let created;
+  if (isClerkId) {
+    created = await db.query<User>(
+      `INSERT INTO users (clerk_id, username, email, reputation)
+       VALUES ($1, $2, $3, 10)
+       RETURNING id, clerk_id AS "clerkId", username, email, reputation`,
+      [inputId, name, userEmail]
+    );
+  } else {
+    created = await db.query<User>(
+      `INSERT INTO users (id, username, email, reputation)
+       VALUES ($1, $2, $3, 10)
+       ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username
+       RETURNING id, clerk_id AS "clerkId", username, email, reputation`,
+      [inputId, name, userEmail]
+    );
+  }
 
   return created.rows[0];
 }
@@ -79,7 +100,6 @@ function rowToNode(row: Record<string, unknown>, userVoteMap?: Map<string, 'supp
 
 // -----------------------------------------------------------------------
 // CYCLE DETECTION ENGINE (Recursive CTE)
-// Executed in PostgreSQL's native engine outside Node.js event loop
 // -----------------------------------------------------------------------
 export async function detectCycle(
   topicId: string,
@@ -114,8 +134,6 @@ export async function detectCycle(
 
 // -----------------------------------------------------------------------
 // SUBGRAPH DEPTH LIMITING & LAZY LOADING TRAVERSAL
-// Uses a PostgreSQL Recursive CTE to fetch nodes up to `maxDepth` hops.
-// Checks if leaf nodes in the returned subgraph have additional un-fetched children.
 // -----------------------------------------------------------------------
 export async function getTopicSubgraph(
   topicId: string,
@@ -140,7 +158,6 @@ export async function getTopicSubgraph(
   const startNodeId = fromNodeId || t.root_node_id;
   if (!startNodeId) throw new ValidationError('Topic has no root node');
 
-  // Recursive CTE fetching subgraph up to maxDepth hops
   const nodesResult = await db.query(
     `WITH RECURSIVE subgraph AS (
        SELECT id, parent_id, author_id, edge_type, pos_x, pos_y, content,
@@ -188,14 +205,10 @@ export async function getTopicSubgraph(
   };
 }
 
-// Full getTopic fallback
 export async function getTopic(id: string, currentUserId?: string): Promise<Topic | null> {
   return getTopicSubgraph(id, undefined, 10, currentUserId);
 }
 
-// -----------------------------------------------------------------------
-// getAllTopics
-// -----------------------------------------------------------------------
 export async function getAllTopics(): Promise<Omit<Topic, 'nodes'>[]> {
   const result = await db.query<{
     id: string;
@@ -214,11 +227,8 @@ export async function getAllTopics(): Promise<Omit<Topic, 'nodes'>[]> {
   }));
 }
 
-// -----------------------------------------------------------------------
-// createTopic
-// -----------------------------------------------------------------------
 export async function createTopic(title: string, rootClaim: string, authorId: string): Promise<Topic> {
-  await getOrCreateUser(authorId);
+  const user = await getOrCreateUser(authorId);
   const client = await db.connect();
 
   try {
@@ -228,7 +238,7 @@ export async function createTopic(title: string, rootClaim: string, authorId: st
       `INSERT INTO topics (title, author_id)
        VALUES ($1, $2)
        RETURNING id, created_at`,
-      [title, authorId]
+      [title, user.id]
     );
     const topicId = topicResult.rows[0].id;
     const topicCreatedAt = topicResult.rows[0].created_at;
@@ -237,13 +247,13 @@ export async function createTopic(title: string, rootClaim: string, authorId: st
       `INSERT INTO nodes (topic_id, parent_id, author_id, content, edge_type, pos_x, pos_y, support_score, is_steel)
        VALUES ($1, NULL, $2, $3, 'root', 470, 40, 1, TRUE)
        RETURNING id, created_at`,
-      [topicId, authorId, rootClaim]
+      [topicId, user.id, rootClaim]
     );
     const rootNodeId = nodeResult.rows[0].id;
 
     await client.query(
       `INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, 'SUPPORT')`,
-      [rootNodeId, authorId]
+      [rootNodeId, user.id]
     );
 
     await client.query(
@@ -271,7 +281,7 @@ export async function createTopic(title: string, rootClaim: string, authorId: st
           contest: 0,
           steel: true,
           userVote: 'support',
-          authorId,
+          authorId: user.id,
           createdAt: nodeResult.rows[0].created_at.toISOString(),
         },
       ],
@@ -284,9 +294,6 @@ export async function createTopic(title: string, rootClaim: string, authorId: st
   }
 }
 
-// -----------------------------------------------------------------------
-// addClaimNode
-// -----------------------------------------------------------------------
 export async function addClaimNode(
   topicId: string,
   parentId: string,
@@ -294,7 +301,7 @@ export async function addClaimNode(
   edgeType: 'supports' | 'refutes' | 'clarifies' | 'evidence',
   content: string
 ): Promise<ClaimNode> {
-  await getOrCreateUser(authorId);
+  const user = await getOrCreateUser(authorId);
 
   const parentResult = await db.query<{ pos_x: number; pos_y: number }>(
     'SELECT pos_x, pos_y FROM nodes WHERE id = $1 AND topic_id = $2',
@@ -322,14 +329,14 @@ export async function addClaimNode(
       `INSERT INTO nodes (topic_id, parent_id, author_id, content, edge_type, pos_x, pos_y, support_score, contest_score, is_steel)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 1, 0, FALSE)
        RETURNING id, created_at`,
-      [topicId, parentId, authorId, content, edgeType, newX, newY]
+      [topicId, parentId, user.id, content, edgeType, newX, newY]
     );
 
     const newNodeId = insertResult.rows[0].id;
 
     await client.query(
       `INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, 'SUPPORT')`,
-      [newNodeId, authorId]
+      [newNodeId, user.id]
     );
 
     await client.query('COMMIT');
@@ -345,7 +352,7 @@ export async function addClaimNode(
       contest: 0,
       steel: false,
       userVote: 'support',
-      authorId,
+      authorId: user.id,
       createdAt: insertResult.rows[0].created_at.toISOString(),
     };
   } catch (err) {
@@ -356,16 +363,13 @@ export async function addClaimNode(
   }
 }
 
-// -----------------------------------------------------------------------
-// voteNode
-// -----------------------------------------------------------------------
 export async function voteNode(
   topicId: string,
   nodeId: string,
   userId: string,
   voteType: 'support' | 'contest'
 ): Promise<ClaimNode> {
-  await getOrCreateUser(userId);
+  const user = await getOrCreateUser(userId);
   const dbVoteType = voteType.toUpperCase();
 
   const client = await db.connect();
@@ -375,7 +379,7 @@ export async function voteNode(
 
     const existingVote = await client.query<{ id: string; vote_type: string }>(
       'SELECT id, vote_type FROM votes WHERE node_id = $1 AND user_id = $2',
-      [nodeId, userId]
+      [nodeId, user.id]
     );
 
     let activeUserVote: 'support' | 'contest' | null = voteType;
@@ -394,7 +398,7 @@ export async function voteNode(
     } else {
       await client.query(
         'INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, $3)',
-        [nodeId, userId, dbVoteType]
+        [nodeId, user.id, dbVoteType]
       );
     }
 
@@ -444,12 +448,9 @@ export async function voteNode(
   }
 }
 
-// -----------------------------------------------------------------------
-// forkTopic
-// -----------------------------------------------------------------------
 export async function forkTopic(topicId: string, authorId: string): Promise<Topic> {
-  await getOrCreateUser(authorId);
-  const original = await getTopic(topicId, authorId);
+  const user = await getOrCreateUser(authorId);
+  const original = await getTopic(topicId, user.id);
   if (!original) throw new ValidationError(`Topic not found: ${topicId}`);
 
   const client = await db.connect();
@@ -466,7 +467,7 @@ export async function forkTopic(topicId: string, authorId: string): Promise<Topi
       `INSERT INTO topics (title, author_id)
        VALUES ($1, $2)
        RETURNING id, created_at`,
-      [`${original.title} (Fork)`, authorId]
+      [`${original.title} (Fork)`, user.id]
     );
     const newTopicId = topicResult.rows[0].id;
     const newTopicCreatedAt = topicResult.rows[0].created_at;
@@ -482,7 +483,7 @@ export async function forkTopic(topicId: string, authorId: string): Promise<Topi
          RETURNING id, created_at`,
         [
           newTopicId,
-          authorId,
+          user.id,
           node.content,
           node.edgeType,
           node.x,

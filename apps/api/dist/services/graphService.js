@@ -11,18 +11,31 @@ exports.voteNode = voteNode;
 exports.forkTopic = forkTopic;
 const db_js_1 = require("../db.js");
 const sanitizer_js_1 = require("../utils/sanitizer.js");
-async function getOrCreateUser(userId, username) {
-    const id = userId || 'system-user-0000-0000-000000000000';
-    const name = username || (id === 'system-user-0000-0000-000000000000' ? 'system' : `User_${id.slice(0, 6)}`);
-    const email = `${name.toLowerCase()}@argus.local`;
-    const existing = await db_js_1.db.query('SELECT id, username, email, reputation FROM users WHERE id = $1', [id]);
+// -----------------------------------------------------------------------
+// Get or Provision User from Clerk Session or Dev Session
+// -----------------------------------------------------------------------
+async function getOrCreateUser(userIdOrClerkId, username, email) {
+    const inputId = userIdOrClerkId || 'system-user-0000-0000-000000000000';
+    const isClerkId = inputId.startsWith('user_');
+    // Look up existing user by ID or clerk_id
+    const existing = await db_js_1.db.query('SELECT id, clerk_id AS "clerkId", username, email, reputation FROM users WHERE id = $1 OR clerk_id = $1', [inputId]);
     if (existing.rowCount > 0) {
         return existing.rows[0];
     }
-    const created = await db_js_1.db.query(`INSERT INTO users (id, username, email, reputation)
-     VALUES ($1, $2, $3, 10)
-     ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username
-     RETURNING id, username, email, reputation`, [id, name, email]);
+    const name = username || (inputId === 'system-user-0000-0000-000000000000' ? 'system' : `User_${inputId.slice(-6)}`);
+    const userEmail = email || `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}@argus.local`;
+    let created;
+    if (isClerkId) {
+        created = await db_js_1.db.query(`INSERT INTO users (clerk_id, username, email, reputation)
+       VALUES ($1, $2, $3, 10)
+       RETURNING id, clerk_id AS "clerkId", username, email, reputation`, [inputId, name, userEmail]);
+    }
+    else {
+        created = await db_js_1.db.query(`INSERT INTO users (id, username, email, reputation)
+       VALUES ($1, $2, $3, 10)
+       ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username
+       RETURNING id, clerk_id AS "clerkId", username, email, reputation`, [inputId, name, userEmail]);
+    }
     return created.rows[0];
 }
 function rowToNode(row, userVoteMap) {
@@ -45,7 +58,6 @@ function rowToNode(row, userVoteMap) {
 }
 // -----------------------------------------------------------------------
 // CYCLE DETECTION ENGINE (Recursive CTE)
-// Executed in PostgreSQL's native engine outside Node.js event loop
 // -----------------------------------------------------------------------
 async function detectCycle(topicId, proposedParentId, proposedChildId) {
     if (proposedChildId && proposedParentId === proposedChildId) {
@@ -69,8 +81,6 @@ async function detectCycle(topicId, proposedParentId, proposedChildId) {
 }
 // -----------------------------------------------------------------------
 // SUBGRAPH DEPTH LIMITING & LAZY LOADING TRAVERSAL
-// Uses a PostgreSQL Recursive CTE to fetch nodes up to `maxDepth` hops.
-// Checks if leaf nodes in the returned subgraph have additional un-fetched children.
 // -----------------------------------------------------------------------
 async function getTopicSubgraph(topicId, fromNodeId, maxDepth = 2, currentUserId) {
     const topicResult = await db_js_1.db.query('SELECT id, title, root_node_id, fork_count, created_at FROM topics WHERE id = $1', [topicId]);
@@ -80,7 +90,6 @@ async function getTopicSubgraph(topicId, fromNodeId, maxDepth = 2, currentUserId
     const startNodeId = fromNodeId || t.root_node_id;
     if (!startNodeId)
         throw new sanitizer_js_1.ValidationError('Topic has no root node');
-    // Recursive CTE fetching subgraph up to maxDepth hops
     const nodesResult = await db_js_1.db.query(`WITH RECURSIVE subgraph AS (
        SELECT id, parent_id, author_id, edge_type, pos_x, pos_y, content,
               support_score, contest_score, is_steel, created_at, 0 AS depth
@@ -119,13 +128,9 @@ async function getTopicSubgraph(topicId, fromNodeId, maxDepth = 2, currentUserId
         nodes: nodesResult.rows.map(row => rowToNode(row, userVoteMap)),
     };
 }
-// Full getTopic fallback
 async function getTopic(id, currentUserId) {
     return getTopicSubgraph(id, undefined, 10, currentUserId);
 }
-// -----------------------------------------------------------------------
-// getAllTopics
-// -----------------------------------------------------------------------
 async function getAllTopics() {
     const result = await db_js_1.db.query('SELECT id, title, root_node_id, fork_count, created_at FROM topics ORDER BY created_at DESC');
     return result.rows.map((t) => ({
@@ -136,24 +141,21 @@ async function getAllTopics() {
         createdAt: t.created_at.toISOString(),
     }));
 }
-// -----------------------------------------------------------------------
-// createTopic
-// -----------------------------------------------------------------------
 async function createTopic(title, rootClaim, authorId) {
-    await getOrCreateUser(authorId);
+    const user = await getOrCreateUser(authorId);
     const client = await db_js_1.db.connect();
     try {
         await client.query('BEGIN');
         const topicResult = await client.query(`INSERT INTO topics (title, author_id)
        VALUES ($1, $2)
-       RETURNING id, created_at`, [title, authorId]);
+       RETURNING id, created_at`, [title, user.id]);
         const topicId = topicResult.rows[0].id;
         const topicCreatedAt = topicResult.rows[0].created_at;
         const nodeResult = await client.query(`INSERT INTO nodes (topic_id, parent_id, author_id, content, edge_type, pos_x, pos_y, support_score, is_steel)
        VALUES ($1, NULL, $2, $3, 'root', 470, 40, 1, TRUE)
-       RETURNING id, created_at`, [topicId, authorId, rootClaim]);
+       RETURNING id, created_at`, [topicId, user.id, rootClaim]);
         const rootNodeId = nodeResult.rows[0].id;
-        await client.query(`INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, 'SUPPORT')`, [rootNodeId, authorId]);
+        await client.query(`INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, 'SUPPORT')`, [rootNodeId, user.id]);
         await client.query('UPDATE topics SET root_node_id = $1 WHERE id = $2', [rootNodeId, topicId]);
         await client.query('COMMIT');
         return {
@@ -174,7 +176,7 @@ async function createTopic(title, rootClaim, authorId) {
                     contest: 0,
                     steel: true,
                     userVote: 'support',
-                    authorId,
+                    authorId: user.id,
                     createdAt: nodeResult.rows[0].created_at.toISOString(),
                 },
             ],
@@ -188,11 +190,8 @@ async function createTopic(title, rootClaim, authorId) {
         client.release();
     }
 }
-// -----------------------------------------------------------------------
-// addClaimNode
-// -----------------------------------------------------------------------
 async function addClaimNode(topicId, parentId, authorId, edgeType, content) {
-    await getOrCreateUser(authorId);
+    const user = await getOrCreateUser(authorId);
     const parentResult = await db_js_1.db.query('SELECT pos_x, pos_y FROM nodes WHERE id = $1 AND topic_id = $2', [parentId, topicId]);
     if (parentResult.rowCount === 0)
         throw new sanitizer_js_1.ValidationError(`Parent node not found: ${parentId}`);
@@ -207,9 +206,9 @@ async function addClaimNode(topicId, parentId, authorId, edgeType, content) {
         await client.query('BEGIN');
         const insertResult = await client.query(`INSERT INTO nodes (topic_id, parent_id, author_id, content, edge_type, pos_x, pos_y, support_score, contest_score, is_steel)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 1, 0, FALSE)
-       RETURNING id, created_at`, [topicId, parentId, authorId, content, edgeType, newX, newY]);
+       RETURNING id, created_at`, [topicId, parentId, user.id, content, edgeType, newX, newY]);
         const newNodeId = insertResult.rows[0].id;
-        await client.query(`INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, 'SUPPORT')`, [newNodeId, authorId]);
+        await client.query(`INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, 'SUPPORT')`, [newNodeId, user.id]);
         await client.query('COMMIT');
         return {
             id: newNodeId,
@@ -222,7 +221,7 @@ async function addClaimNode(topicId, parentId, authorId, edgeType, content) {
             contest: 0,
             steel: false,
             userVote: 'support',
-            authorId,
+            authorId: user.id,
             createdAt: insertResult.rows[0].created_at.toISOString(),
         };
     }
@@ -234,16 +233,13 @@ async function addClaimNode(topicId, parentId, authorId, edgeType, content) {
         client.release();
     }
 }
-// -----------------------------------------------------------------------
-// voteNode
-// -----------------------------------------------------------------------
 async function voteNode(topicId, nodeId, userId, voteType) {
-    await getOrCreateUser(userId);
+    const user = await getOrCreateUser(userId);
     const dbVoteType = voteType.toUpperCase();
     const client = await db_js_1.db.connect();
     try {
         await client.query('BEGIN');
-        const existingVote = await client.query('SELECT id, vote_type FROM votes WHERE node_id = $1 AND user_id = $2', [nodeId, userId]);
+        const existingVote = await client.query('SELECT id, vote_type FROM votes WHERE node_id = $1 AND user_id = $2', [nodeId, user.id]);
         let activeUserVote = voteType;
         if (existingVote.rowCount > 0) {
             const currentType = existingVote.rows[0].vote_type;
@@ -259,7 +255,7 @@ async function voteNode(topicId, nodeId, userId, voteType) {
             }
         }
         else {
-            await client.query('INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, $3)', [nodeId, userId, dbVoteType]);
+            await client.query('INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, $3)', [nodeId, user.id, dbVoteType]);
         }
         const counts = await client.query('SELECT vote_type, COUNT(*) as count FROM votes WHERE node_id = $1 GROUP BY vote_type', [nodeId]);
         let supportScore = 0;
@@ -295,12 +291,9 @@ async function voteNode(topicId, nodeId, userId, voteType) {
         client.release();
     }
 }
-// -----------------------------------------------------------------------
-// forkTopic
-// -----------------------------------------------------------------------
 async function forkTopic(topicId, authorId) {
-    await getOrCreateUser(authorId);
-    const original = await getTopic(topicId, authorId);
+    const user = await getOrCreateUser(authorId);
+    const original = await getTopic(topicId, user.id);
     if (!original)
         throw new sanitizer_js_1.ValidationError(`Topic not found: ${topicId}`);
     const client = await db_js_1.db.connect();
@@ -309,7 +302,7 @@ async function forkTopic(topicId, authorId) {
         await client.query('UPDATE topics SET fork_count = fork_count + 1 WHERE id = $1', [topicId]);
         const topicResult = await client.query(`INSERT INTO topics (title, author_id)
        VALUES ($1, $2)
-       RETURNING id, created_at`, [`${original.title} (Fork)`, authorId]);
+       RETURNING id, created_at`, [`${original.title} (Fork)`, user.id]);
         const newTopicId = topicResult.rows[0].id;
         const newTopicCreatedAt = topicResult.rows[0].created_at;
         const idMap = new Map();
@@ -320,7 +313,7 @@ async function forkTopic(topicId, authorId) {
          VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id, created_at`, [
                 newTopicId,
-                authorId,
+                user.id,
                 node.content,
                 node.edgeType,
                 node.x,
