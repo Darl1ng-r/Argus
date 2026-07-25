@@ -10,12 +10,15 @@
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.9",
+    "cytoscape": "^3.34.0",
+    "cytoscape-dagre": "^4.0.0",
     "lucide-react": "^0.378.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.18.1"
   },
   "devDependencies": {
+    "@types/cytoscape": "^3.21.9",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.2.1",

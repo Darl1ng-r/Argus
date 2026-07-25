@@ -1,20 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
+import cytoscape, { Core, EventObject } from 'cytoscape';
+import dagre from 'cytoscape-dagre';
 import { ClaimNode, ViewMode } from '../types';
 
-interface EdgeMeta {
-  label: string;
-  color: string;
-  marker: string;
-  dashed?: boolean;
-}
-
-const EDGE_META: Record<string, EdgeMeta> = {
-  root: { label: 'ROOT CLAIM', color: '#B8892B', marker: 'arrow-gold' },
-  supports: { label: 'SUPPORTS', color: '#6E7B4A', marker: 'arrow-laurel' },
-  refutes: { label: 'REFUTES', color: '#A2472E', marker: 'arrow-oxide' },
-  clarifies: { label: 'CLARIFIES', color: '#2E5C7A', marker: 'arrow-aegean' },
-  evidence: { label: 'NEEDS EVIDENCE', color: '#B8892B', marker: 'arrow-gold', dashed: true }
-};
+// Register dagre layout plugin with cytoscape
+cytoscape.use(dagre);
 
 interface GraphCanvasProps {
   nodes: ClaimNode[];
@@ -24,197 +14,288 @@ interface GraphCanvasProps {
   onUpdateNodePosition: (id: string, x: number, y: number) => void;
 }
 
+const COLOR_MAP: Record<string, string> = {
+  root: '#B8892B',
+  supports: '#6E7B4A',
+  refutes: '#A2472E',
+  clarifies: '#2E5C7A',
+  evidence: '#B8892B',
+};
+
 export const GraphCanvas: React.FC<GraphCanvasProps> = ({
   nodes,
   selectedId,
   viewMode,
   onSelectNode,
-  onUpdateNodePosition
+  onUpdateNodePosition,
 }) => {
-  const [zoom, setZoom] = useState(1);
-  const [draggingNode, setDraggingNode] = useState<ClaimNode | null>(null);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const [dragMoved, setDragMoved] = useState(false);
-
   const containerRef = useRef<HTMLDivElement>(null);
-  const wrapperRef = useRef<HTMLDivElement>(null);
+  const cyRef = useRef<Core | null>(null);
 
-  const estimateHeight = (n: ClaimNode) => {
-    const lines = Math.ceil(n.content.length / 30);
-    return 60 + lines * 15;
-  };
-
-  // Auto-scroll / center canvas on target node when selectedId changes or on initial deep link load
+  // Initialize Cytoscape Instance
   useEffect(() => {
-    if (!selectedId || !containerRef.current) return;
-    const targetNode = nodes.find((n) => n.id === selectedId);
-    if (!targetNode) return;
+    if (!containerRef.current) return;
 
-    const container = containerRef.current;
-    const nodeCenterX = (targetNode.x + 106) * zoom;
-    const nodeCenterY = (targetNode.y + 60) * zoom;
-
-    const scrollX = Math.max(0, nodeCenterX - container.clientWidth / 2);
-    const scrollY = Math.max(0, nodeCenterY - container.clientHeight / 2);
-
-    container.scrollTo({
-      left: scrollX,
-      top: scrollY,
-      behavior: 'smooth'
+    const cy = cytoscape({
+      container: containerRef.current,
+      boxSelectionEnabled: false,
+      autounselectify: false,
+      style: [
+        {
+          selector: 'node',
+          style: {
+            shape: 'round-rectangle',
+            width: 240,
+            height: 'label',
+            padding: '16px',
+            'background-color': '#FFFDF8',
+            'border-width': 2,
+            'border-color': '#DED6C3',
+            'border-opacity': 1,
+            color: '#2B2622',
+            'font-family': 'Crimson Pro, serif',
+            'font-size': '14px',
+            'line-height': 1.35,
+            'text-wrap': 'wrap',
+            'text-max-width': '210px',
+            'text-valign': 'center',
+            'text-halign': 'center',
+            content: 'data(label)',
+            'overlay-opacity': 0,
+            'transition-property': 'background-color, border-color, opacity',
+            'transition-duration': 200,
+          },
+        },
+        {
+          selector: 'node[edgeType = "root"]',
+          style: {
+            'border-color': '#B8892B',
+            'border-width': 3,
+            'font-family': 'Cinzel, serif',
+            'font-size': '14.5px',
+            'background-color': '#FFFDF8',
+          },
+        },
+        {
+          selector: 'node[edgeType = "supports"]',
+          style: {
+            'border-color': '#6E7B4A',
+          },
+        },
+        {
+          selector: 'node[edgeType = "refutes"]',
+          style: {
+            'border-color': '#A2472E',
+          },
+        },
+        {
+          selector: 'node[edgeType = "clarifies"]',
+          style: {
+            'border-color': '#2E5C7A',
+          },
+        },
+        {
+          selector: 'node[edgeType = "evidence"]',
+          style: {
+            'border-color': '#B8892B',
+            'border-style': 'dashed',
+          },
+        },
+        {
+          selector: 'node:selected',
+          style: {
+            'border-color': '#B8892B',
+            'border-width': 4,
+            'background-color': '#FFFDF8',
+          },
+        },
+        {
+          selector: 'edge',
+          style: {
+            width: 2,
+            'curve-style': 'bezier',
+            'target-arrow-shape': 'triangle',
+            'arrow-scale': 1.2,
+            opacity: 0.8,
+          },
+        },
+        {
+          selector: 'edge[type = "supports"]',
+          style: {
+            'line-color': '#6E7B4A',
+            'target-arrow-color': '#6E7B4A',
+          },
+        },
+        {
+          selector: 'edge[type = "refutes"]',
+          style: {
+            'line-color': '#A2472E',
+            'target-arrow-color': '#A2472E',
+          },
+        },
+        {
+          selector: 'edge[type = "clarifies"]',
+          style: {
+            'line-color': '#2E5C7A',
+            'target-arrow-color': '#2E5C7A',
+          },
+        },
+        {
+          selector: 'edge[type = "evidence"]',
+          style: {
+            'line-color': '#B8892B',
+            'target-arrow-color': '#B8892B',
+            'line-style': 'dashed',
+          },
+        },
+        // Steelman Mode Styling: Dim non-steel nodes
+        {
+          selector: '.dimmed',
+          style: {
+            opacity: 0.2,
+          },
+        },
+      ],
     });
-  }, [selectedId, nodes, zoom]);
 
-  const handlePointerDown = (e: React.PointerEvent, node: ClaimNode) => {
-    e.stopPropagation();
-    setDraggingNode(node);
-    setDragMoved(false);
-
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    setDragOffset({
-      x: (e.clientX - rect.left) / zoom,
-      y: (e.clientY - rect.top) / zoom
+    // Event Handlers
+    cy.on('tap', 'node', (evt: EventObject) => {
+      const node = evt.target;
+      onSelectNode(node.id());
     });
-  };
 
-  useEffect(() => {
-    const handlePointerMove = (e: PointerEvent) => {
-      if (!draggingNode || !wrapperRef.current) return;
-      setDragMoved(true);
-      const wrapRect = wrapperRef.current.getBoundingClientRect();
-      const newX = (e.clientX - wrapRect.left) / zoom - dragOffset.x;
-      const newY = (e.clientY - wrapRect.top) / zoom - dragOffset.y;
-      onUpdateNodePosition(draggingNode.id, newX, newY);
-    };
-
-    const handlePointerUp = () => {
-      if (draggingNode && !dragMoved) {
-        onSelectNode(draggingNode.id);
+    cy.on('tap', (evt: EventObject) => {
+      if (evt.target === cy) {
+        onSelectNode(null);
       }
-      setDraggingNode(null);
-    };
+    });
 
-    if (draggingNode) {
-      window.addEventListener('pointermove', handlePointerMove);
-      window.addEventListener('pointerup', handlePointerUp);
-    }
+    cy.on('dragfree', 'node', (evt: EventObject) => {
+      const node = evt.target;
+      const pos = node.position();
+      onUpdateNodePosition(node.id(), pos.x, pos.y);
+    });
+
+    cyRef.current = cy;
 
     return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
+      cy.destroy();
     };
-  }, [draggingNode, dragOffset, zoom, dragMoved, onUpdateNodePosition, onSelectNode]);
+  }, []);
+
+  // Update Cytoscape Graph Elements on Node/ViewMode updates
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+
+    cy.batch(() => {
+      // Build elements array
+      const elements: cytoscape.ElementDefinition[] = [];
+
+      nodes.forEach((n) => {
+        elements.push({
+          data: {
+            id: n.id,
+            label: n.content,
+            edgeType: n.edgeType,
+            support: n.support,
+            contest: n.contest,
+            steel: n.steel,
+          },
+          position: { x: n.x, y: n.y },
+        });
+
+        if (n.parent) {
+          elements.push({
+            data: {
+              id: `e_${n.parent}_${n.id}`,
+              source: n.parent,
+              target: n.id,
+              type: n.edgeType,
+            },
+          });
+        }
+      });
+
+      // Synchronize Cytoscape collection
+      cy.json({ elements });
+
+      // Apply Steelman Mode classes
+      if (viewMode === 'steelman') {
+        cy.nodes().forEach((ele) => {
+          const isSteel = ele.data('steel');
+          const isRoot = ele.data('edgeType') === 'root';
+          if (!isSteel && !isRoot) {
+            ele.addClass('dimmed');
+          } else {
+            ele.removeClass('dimmed');
+          }
+        });
+      } else {
+        cy.nodes().removeClass('dimmed');
+      }
+
+      // Selection state
+      cy.nodes().unselect();
+      if (selectedId) {
+        const sel = cy.getElementById(selectedId);
+        if (sel) {
+          sel.select();
+          cy.animate({
+            center: { eles: sel },
+            zoom: Math.max(cy.zoom(), 0.95),
+            duration: 350,
+          });
+        }
+      }
+    });
+  }, [nodes, selectedId, viewMode]);
+
+  // Run Dagre Layout auto-positioning
+  const handleAutoLayout = () => {
+    const cy = cyRef.current;
+    if (!cy) return;
+
+    const layout = cy.layout({
+      name: 'dagre',
+      rankDir: 'TB',
+      nodeSep: 70,
+      rankSep: 90,
+      padding: 50,
+      animate: true,
+      animationDuration: 450,
+    } as any);
+
+    layout.run();
+  };
+
+  const handleZoomIn = () => cyRef.current?.zoom(cyRef.current.zoom() * 1.2);
+  const handleZoomOut = () => cyRef.current?.zoom(cyRef.current.zoom() * 0.8);
+  const handleResetZoom = () => cyRef.current?.fit(undefined, 50);
 
   return (
-    <div
-      ref={containerRef}
-      className="canvas-area"
-      onPointerDown={(e) => {
-        if (e.target === e.currentTarget || (e.target as HTMLElement).id === 'graph-wrapper') {
-          onSelectNode(null);
-        }
-      }}
-    >
+    <div className="canvas-area" style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div
-        id="graph-wrapper"
-        ref={wrapperRef}
-        className={viewMode === 'steelman' ? 'mode-steelman' : ''}
-        style={{ transform: `scale(${zoom})` }}
-      >
-        <svg className="edges" id="edgesSvg">
-          <defs>
-            <marker id="arrow-laurel" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-              <path d="M0,0 L8,4 L0,8 Z" fill="#6E7B4A" />
-            </marker>
-            <marker id="arrow-oxide" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-              <path d="M0,0 L8,4 L0,8 Z" fill="#A2472E" />
-            </marker>
-            <marker id="arrow-aegean" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-              <path d="M0,0 L8,4 L0,8 Z" fill="#2E5C7A" />
-            </marker>
-            <marker id="arrow-gold" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-              <path d="M0,0 L8,4 L0,8 Z" fill="#B8892B" />
-            </marker>
-          </defs>
+        ref={containerRef}
+        style={{
+          width: '100%',
+          height: '100%',
+          background: 'var(--marble)',
+          cursor: 'grab',
+        }}
+      />
 
-          {nodes.map((n) => {
-            if (!n.parent) return null;
-            const parent = nodes.find((p) => p.id === n.parent);
-            if (!parent) return null;
-
-            const pw = parent.id === 'root' || parent.edgeType === 'root' ? 280 : 212;
-            const ph = parent.id === 'root' || parent.edgeType === 'root' ? 108 : estimateHeight(parent);
-            const start = { x: parent.x + pw / 2, y: parent.y + ph };
-            const end = { x: n.x + 106, y: n.y };
-            const midY = (start.y + end.y) / 2;
-            const meta = EDGE_META[n.edgeType] || EDGE_META.supports;
-
-            return (
-              <path
-                key={`edge-${n.id}`}
-                className="edge"
-                d={`M${start.x},${start.y} C${start.x},${midY} ${end.x},${midY} ${end.x},${end.y}`}
-                stroke={meta.color}
-                strokeWidth="1.75"
-                fill="none"
-                markerEnd={`url(#${meta.marker})`}
-                strokeDasharray={meta.dashed ? '5,4' : undefined}
-                style={{ opacity: 0.75 }}
-              />
-            );
-          })}
-        </svg>
-
-        {nodes.map((n) => {
-          const meta = EDGE_META[n.edgeType] || EDGE_META.supports;
-          const wellSupported = n.support > n.contest * 1.8;
-          const isSelected = n.id === selectedId;
-          const isRoot = n.edgeType === 'root';
-
-          return (
-            <div
-              key={n.id}
-              className={`node ${isSelected ? 'selected' : ''} ${isRoot ? 'root' : ''}`}
-              data-id={n.id}
-              data-steel={n.steel ? '1' : '0'}
-              style={{ left: `${n.x}px`, top: `${n.y}px` }}
-              onPointerDown={(e) => handlePointerDown(e, n)}
-            >
-              <div className="eyebrow" style={{ color: meta.color }}>
-                <span className="dot" style={{ background: meta.color }}></span>
-                {meta.label}
-              </div>
-              <div className="content">{n.content}</div>
-
-              {isRoot ? (
-                <div className="columns">
-                  <span></span><span></span><span></span><span></span><span></span><span></span>
-                </div>
-              ) : (
-                <div className="meta">
-                  {wellSupported ? (
-                    <span className="laurel">
-                      <svg viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2C9 6 7 10 7 14a5 5 0 0010 0c0-4-2-8-5-12z" />
-                      </svg>
-                      well-supported
-                    </span>
-                  ) : (
-                    <span>
-                      {n.support} · {n.contest}
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
+      {/* Canvas Controls */}
       <div className="zoom-ctrl">
-        <button onClick={() => setZoom((z) => Math.min(1.4, z + 0.1))}>+</button>
-        <button onClick={() => setZoom((z) => Math.max(0.6, z - 0.1))}>−</button>
-        <button onClick={() => setZoom(1)} style={{ fontSize: '11px' }}>
-          ⟲
+        <button onClick={handleZoomIn} title="Zoom In">+</button>
+        <button onClick={handleZoomOut} title="Zoom Out">−</button>
+        <button onClick={handleResetZoom} title="Fit to Screen" style={{ fontSize: '11px' }}>⟲</button>
+        <button
+          onClick={handleAutoLayout}
+          title="Auto-organize DAG layout with Cytoscape Dagre"
+          style={{ fontSize: '10px', fontWeight: 600, padding: '0 6px', width: 'auto' }}
+        >
+          Auto Layout
         </button>
       </div>
     </div>
