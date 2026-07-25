@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { User } from '../types';
 
@@ -20,57 +20,71 @@ interface HomePageProps {
 export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
   const [topics, setTopics] = useState<TopicSummary[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newRootClaim, setNewRootClaim] = useState('');
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
 
   const navigate = useNavigate();
 
-  useEffect(() => {
-    fetchTopics();
-  }, []);
+  const fetchTopics = useCallback(async () => {
+    setIsLoading(true);
+    setErrorMsg(null);
 
-  const fetchTopics = async () => {
     try {
       const res = await fetch('/api/topics');
-      if (res.ok) {
-        const data: TopicSummary[] = await res.json();
-        
-        // Enrich topic items with root claim previews and claim counts
-        const enriched = await Promise.all(
-          data.map(async (t) => {
-            try {
-              const detailRes = await fetch(`/api/topics/${t.id}?depth=1`);
-              if (detailRes.ok) {
-                const detail = await detailRes.json();
-                return {
-                  ...t,
-                  claimCount: detail.nodes?.length || 1,
-                  rootClaimContent: detail.nodes?.find((n: any) => n.edgeType === 'root')?.content || t.title
-                };
-              }
-            } catch {
-              // Fallback
-            }
-            return t;
-          })
-        );
-        setTopics(enriched);
+      if (!res.ok) {
+        throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
       }
-    } catch (err) {
+
+      const data: TopicSummary[] = await res.json();
+
+      const enriched = await Promise.all(
+        data.map(async (t) => {
+          try {
+            const detailRes = await fetch(`/api/topics/${t.id}?depth=1`);
+            if (detailRes.ok) {
+              const detail = await detailRes.json();
+              return {
+                ...t,
+                claimCount: detail.nodes?.length || 1,
+                rootClaimContent: detail.nodes?.find((n: any) => n.edgeType === 'root')?.content || t.title
+              };
+            }
+          } catch {
+            // Ignore single topic preview fetch failure
+          }
+          return t;
+        })
+      );
+      setTopics(enriched);
+    } catch (err: any) {
       console.error('Failed to fetch topics', err);
+      setErrorMsg(
+        err.message || 'Unable to connect to the Argus API server. Please check your network connection or verify the backend server is running.'
+      );
+    } finally {
+      setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchTopics();
+  }, [fetchTopics]);
 
   const handleCreateTopic = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMsg(null);
+    setFormError(null);
 
     if (!newTitle.trim() || !newRootClaim.trim()) {
-      setErrorMsg('Both Debate Title and Root Claim are required.');
+      setFormError('Both Debate Title and Root Claim are required.');
       return;
     }
+
+    setIsCreating(true);
 
     try {
       const userId = localStorage.getItem('argus_user_id') || 'system';
@@ -97,10 +111,12 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
         navigate(`/t/${createdTopic.id}`);
       } else {
         const errData = await res.json();
-        setErrorMsg(errData.error || 'Failed to create topic.');
+        setFormError(errData.error || 'Failed to create topic.');
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Network error while creating topic.');
+      setFormError(err.message || 'Network error while creating topic.');
+    } finally {
+      setIsCreating(false);
     }
   };
 
@@ -187,54 +203,123 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
           </div>
         </div>
 
-        {/* Topics Grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '22px' }}>
-          {filteredTopics.map((topic) => (
-            <div
-              key={topic.id}
-              onClick={() => navigate(`/t/${topic.id}`)}
-              style={{
-                background: 'linear-gradient(180deg, #FFFDF8, #F3EEE1)',
-                border: '1px solid var(--marble-line)',
-                borderRadius: '8px',
-                padding: '22px 20px',
-                boxShadow: 'var(--shadow)',
-                cursor: 'pointer',
-                transition: 'transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'space-between'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.transform = 'translateY(-2px)';
-                e.currentTarget.style.borderColor = 'var(--gold)';
-                e.currentTarget.style.boxShadow = '0 8px 24px rgba(43,38,34,0.12)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.borderColor = 'var(--marble-line)';
-                e.currentTarget.style.boxShadow = 'var(--shadow)';
-              }}
+        {/* Network Error Banner */}
+        {errorMsg && (
+          <div
+            style={{
+              background: '#FDF2F0',
+              border: '1px solid var(--oxide)',
+              borderRadius: '8px',
+              padding: '20px',
+              marginBottom: '32px',
+              textAlign: 'center',
+              boxShadow: 'var(--shadow)'
+            }}
+          >
+            <h3 style={{ fontFamily: 'Cinzel, serif', fontSize: '15px', color: 'var(--oxide)', margin: '0 0 8px' }}>
+              CONNECTION ERROR
+            </h3>
+            <p style={{ fontFamily: 'Crimson Pro, serif', fontSize: '15.5px', color: 'var(--ink)', margin: '0 0 16px', maxWidth: '600px', marginLeft: 'auto', marginRight: 'auto' }}>
+              {errorMsg}
+            </p>
+            <button
+              onClick={fetchTopics}
+              className="fork-btn"
+              style={{ background: 'var(--oxide)', margin: '0 auto' }}
             >
-              <div>
-                <div style={{ fontFamily: 'Cinzel, serif', fontSize: '9.5px', letterSpacing: '0.1em', color: 'var(--gold)', marginBottom: '8px', fontWeight: 600 }}>
-                  ARGUMENT GRAPH
-                </div>
-                <h3 style={{ fontFamily: 'Cinzel, serif', fontSize: '15px', lineHeight: 1.35, margin: '0 0 12px', color: 'var(--ink)' }}>
-                  {topic.title}
-                </h3>
-                <p style={{ fontFamily: 'Crimson Pro, serif', fontSize: '14.5px', color: 'var(--ink-soft)', lineHeight: 1.4, margin: '0 0 16px', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                  "{topic.rootClaimContent || topic.title}"
-                </p>
-              </div>
+              ↻ Retry Connection
+            </button>
+          </div>
+        )}
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--ink-soft)', paddingTop: '12px', borderTop: '1px solid var(--marble-line)' }}>
-                <span>{topic.claimCount || 1} claims · {topic.forkCount} forks</span>
-                <span style={{ color: 'var(--aegean)', fontWeight: 600 }}>View Graph →</span>
+        {/* Loading Skeleton */}
+        {isLoading && !errorMsg && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '22px' }}>
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                style={{
+                  background: 'var(--marble-panel)',
+                  border: '1px solid var(--marble-line)',
+                  borderRadius: '8px',
+                  padding: '24px 20px',
+                  height: '180px',
+                  animation: 'pulse 1.5s infinite ease-in-out'
+                }}
+              >
+                <div style={{ width: '40%', height: '12px', background: 'var(--marble-line)', marginBottom: '14px', borderRadius: '4px' }}></div>
+                <div style={{ width: '85%', height: '18px', background: 'var(--marble-line)', marginBottom: '10px', borderRadius: '4px' }}></div>
+                <div style={{ width: '60%', height: '14px', background: 'var(--marble-line)', borderRadius: '4px' }}></div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
+
+        {/* Empty State */}
+        {!isLoading && !errorMsg && filteredTopics.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '48px 20px', background: '#FFFDF8', border: '1px solid var(--marble-line)', borderRadius: '8px' }}>
+            <h3 style={{ fontFamily: 'Cinzel, serif', fontSize: '16px', color: 'var(--ink-soft)', marginBottom: '8px' }}>
+              NO DEBATES FOUND
+            </h3>
+            <p style={{ fontFamily: 'Crimson Pro, serif', fontSize: '16px', color: 'var(--ink-soft)', marginBottom: '20px' }}>
+              {searchQuery ? `No topics match "${searchQuery}".` : 'Be the first to propose an argument map on Argus.'}
+            </p>
+            <button className="fork-btn" onClick={() => setIsModalOpen(true)} style={{ background: 'var(--gold)', margin: '0 auto' }}>
+              ＋ Start a Debate
+            </button>
+          </div>
+        )}
+
+        {/* Topics Grid */}
+        {!isLoading && !errorMsg && filteredTopics.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '22px' }}>
+            {filteredTopics.map((topic) => (
+              <div
+                key={topic.id}
+                onClick={() => navigate(`/t/${topic.id}`)}
+                style={{
+                  background: 'linear-gradient(180deg, #FFFDF8, #F3EEE1)',
+                  border: '1px solid var(--marble-line)',
+                  borderRadius: '8px',
+                  padding: '22px 20px',
+                  boxShadow: 'var(--shadow)',
+                  cursor: 'pointer',
+                  transition: 'transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.borderColor = 'var(--gold)';
+                  e.currentTarget.style.boxShadow = '0 8px 24px rgba(43,38,34,0.12)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.borderColor = 'var(--marble-line)';
+                  e.currentTarget.style.boxShadow = 'var(--shadow)';
+                }}
+              >
+                <div>
+                  <div style={{ fontFamily: 'Cinzel, serif', fontSize: '9.5px', letterSpacing: '0.1em', color: 'var(--gold)', marginBottom: '8px', fontWeight: 600 }}>
+                    ARGUMENT GRAPH
+                  </div>
+                  <h3 style={{ fontFamily: 'Cinzel, serif', fontSize: '15px', lineHeight: 1.35, margin: '0 0 12px', color: 'var(--ink)' }}>
+                    {topic.title}
+                  </h3>
+                  <p style={{ fontFamily: 'Crimson Pro, serif', fontSize: '14.5px', color: 'var(--ink-soft)', lineHeight: 1.4, margin: '0 0 16px', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                    "{topic.rootClaimContent || topic.title}"
+                  </p>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--ink-soft)', paddingTop: '12px', borderTop: '1px solid var(--marble-line)' }}>
+                  <span>{topic.claimCount || 1} claims · {topic.forkCount} forks</span>
+                  <span style={{ color: 'var(--aegean)', fontWeight: 600 }}>View Graph →</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </main>
 
       {/* Start New Debate Modal */}
@@ -268,9 +353,9 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
               START A NEW DEBATE
             </h3>
 
-            {errorMsg && (
+            {formError && (
               <div style={{ background: '#FDF2F0', color: 'var(--oxide)', padding: '10px 14px', borderRadius: '6px', fontSize: '12.5px', marginBottom: '14px', border: '1px solid #F5C6CB' }}>
-                {errorMsg}
+                {formError}
               </div>
             )}
 
@@ -283,6 +368,7 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
                 placeholder="e.g. Artificial Superintelligence should be paused globally."
+                disabled={isCreating}
                 style={{
                   width: '100%',
                   padding: '10px 12px',
@@ -302,6 +388,7 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
                 value={newRootClaim}
                 onChange={(e) => setNewRootClaim(e.target.value)}
                 placeholder="State the primary atomic claim plainly…"
+                disabled={isCreating}
                 rows={3}
                 style={{
                   width: '100%',
@@ -320,6 +407,7 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
+                  disabled={isCreating}
                   style={{
                     padding: '9px 16px',
                     borderRadius: '6px',
@@ -335,6 +423,7 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
 
                 <button
                   type="submit"
+                  disabled={isCreating}
                   style={{
                     padding: '9px 20px',
                     borderRadius: '6px',
@@ -344,10 +433,11 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
                     fontFamily: 'Inter, sans-serif',
                     fontWeight: 600,
                     fontSize: '12.5px',
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    opacity: isCreating ? 0.7 : 1
                   }}
                 >
-                  Initialize Debate Graph
+                  {isCreating ? 'Initializing…' : 'Initialize Debate Graph'}
                 </button>
               </div>
             </form>

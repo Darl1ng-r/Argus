@@ -4,7 +4,7 @@ import { Header } from '../components/Header';
 import { GraphCanvas } from '../components/GraphCanvas';
 import { SidePanel } from '../components/SidePanel';
 import { Legend } from '../components/Legend';
-import { Toast } from '../components/Toast';
+import { Toast, ToastState } from '../components/Toast';
 import { Topic, ClaimNode, ViewMode, EdgeType, User } from '../types';
 
 interface TopicPageProps {
@@ -19,8 +19,9 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   const [topic, setTopic] = useState<Topic | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('graph');
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
 
   const getAuthHeaders = useCallback(() => {
@@ -35,6 +36,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
 
   const fetchTopic = useCallback(async (id: string) => {
     setIsLoading(true);
+    setErrorMsg(null);
     setNotFound(false);
 
     try {
@@ -47,9 +49,14 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
         setTopic(data);
       } else if (res.status === 404) {
         setNotFound(true);
+      } else {
+        throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to fetch topic', err);
+      setErrorMsg(
+        err.message || 'Unable to connect to the Argus API server. Please check your connection or verify the server is running.'
+      );
     } finally {
       setIsLoading(false);
     }
@@ -61,15 +68,18 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     }
   }, [topicId, fetchTopic]);
 
-  const showToast = (msg: string) => {
-    setToastMsg(msg);
+  const showToast = (message: string, type: 'info' | 'error' | 'success' = 'info') => {
+    setToast({ message, type });
     setTimeout(() => {
-      setToastMsg((current) => (current === msg ? null : current));
-    }, 2800);
+      setToast((current) => (current?.message === message ? null : current));
+    }, 3200);
   };
 
   const handleVote = async (nodeId: string, voteType: 'support' | 'contest') => {
     if (!topic || !currentUser) return;
+
+    // Snapshot previous topic state for rollback on network error
+    const previousTopic = topic;
 
     try {
       const res = await fetch(`/api/topics/${topic.id}/nodes/${nodeId}/vote`, {
@@ -89,13 +99,18 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
         });
 
         if (updatedNode.userVote) {
-          showToast(`Vote recorded as ${updatedNode.userVote.toUpperCase()}.`);
+          showToast(`Vote recorded as ${updatedNode.userVote.toUpperCase()}.`, 'success');
         } else {
-          showToast('Vote removed.');
+          showToast('Vote removed.', 'info');
         }
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || 'Vote update failed.', 'error');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to submit vote to backend', err);
+      setTopic(previousTopic); // Rollback optimistic update
+      showToast('Network error: Vote could not be saved to server.', 'error');
     }
   };
 
@@ -113,13 +128,14 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
         const newNode: ClaimNode = await res.json();
         setTopic((prev) => (prev ? { ...prev, nodes: [...prev.nodes, newNode] } : null));
         setSelectedId(newNode.id);
-        showToast('Claim added to the graph.');
+        showToast('Claim added to the argument graph.', 'success');
       } else {
         const errData = await res.json();
-        showToast(errData.error || 'Failed to add claim.');
+        showToast(errData.error || 'Failed to add claim.', 'error');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to create node on backend', err);
+      showToast('Network error: Could not submit claim to server.', 'error');
     }
   };
 
@@ -133,11 +149,15 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
 
       if (res.ok) {
         const forkedTopic: Topic = await res.json();
-        showToast('Forked — redirecting to your new debate workspace…');
+        showToast('Forked — redirecting to your new debate workspace…', 'success');
         setTimeout(() => navigate(`/t/${forkedTopic.id}`), 1000);
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || 'Failed to fork topic.', 'error');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to fork topic', err);
+      showToast('Network error: Could not fork topic graph.', 'error');
     }
   };
 
@@ -151,14 +171,6 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     });
   };
 
-  if (isLoading) {
-    return (
-      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--marble)', color: 'var(--ink-soft)', fontFamily: 'Cinzel, serif' }}>
-        LOADING ARGUMENT GRAPH…
-      </div>
-    );
-  }
-
   if (notFound) {
     return (
       <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--marble)', color: 'var(--ink)' }}>
@@ -167,7 +179,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
           This argument graph does not exist or has been archived.
         </p>
         <button className="fork-btn" onClick={() => navigate('/')}>
-          ← Back to Debates
+          ← Back to All Debates
         </button>
       </div>
     );
@@ -177,7 +189,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      {/* Header with Back to Home Link */}
+      {/* Top Bar with Back Link */}
       <div style={{ background: 'var(--marble-panel)', padding: '6px 28px', borderBottom: '1px solid var(--marble-line)', display: 'flex', alignItems: 'center' }}>
         <button
           onClick={() => navigate('/')}
@@ -208,7 +220,49 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
       />
 
       <div className="app">
-        {viewMode === 'diff' ? (
+        {/* Network Error Screen */}
+        {errorMsg && (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+            <div
+              style={{
+                background: '#FDF2F0',
+                border: '1px solid var(--oxide)',
+                borderRadius: '8px',
+                padding: '28px',
+                maxWidth: '520px',
+                textAlign: 'center',
+                boxShadow: 'var(--shadow)'
+              }}
+            >
+              <h3 style={{ fontFamily: 'Cinzel, serif', fontSize: '16px', color: 'var(--oxide)', margin: '0 0 10px' }}>
+                SERVER CONNECTION FAILED
+              </h3>
+              <p style={{ fontFamily: 'Crimson Pro, serif', fontSize: '16px', color: 'var(--ink)', margin: '0 0 20px', lineHeight: 1.45 }}>
+                {errorMsg}
+              </p>
+              <button
+                onClick={() => topicId && fetchTopic(topicId)}
+                className="fork-btn"
+                style={{ background: 'var(--oxide)', margin: '0 auto' }}
+              >
+                ↻ Retry Loading Graph
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Loading Canvas Skeleton */}
+        {isLoading && !errorMsg && (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '14px', background: 'var(--marble)' }}>
+            <div style={{ fontFamily: 'Cinzel, serif', fontSize: '13px', letterSpacing: '0.12em', color: 'var(--gold)' }}>
+              FETCHING ARGUMENT GRAPH…
+            </div>
+            <div style={{ width: '40px', height: '40px', border: '3px solid var(--marble-line)', borderTopColor: 'var(--gold)', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+          </div>
+        )}
+
+        {/* Graph Canvas */}
+        {!isLoading && !errorMsg && viewMode === 'diff' ? (
           <div className="canvas-area">
             <div className="diff-empty show">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">
@@ -224,7 +278,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
             </div>
           </div>
         ) : (
-          topic && (
+          !isLoading && !errorMsg && topic && (
             <GraphCanvas
               nodes={topic.nodes}
               selectedId={selectedId}
@@ -235,17 +289,19 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
           )
         )}
 
-        {viewMode !== 'diff' && <Legend />}
+        {!isLoading && !errorMsg && viewMode !== 'diff' && <Legend />}
 
-        <SidePanel
-          selectedNode={selectedNode}
-          currentUser={currentUser}
-          onVote={handleVote}
-          onAddClaim={handleAddClaim}
-        />
+        {!isLoading && !errorMsg && (
+          <SidePanel
+            selectedNode={selectedNode}
+            currentUser={currentUser}
+            onVote={handleVote}
+            onAddClaim={handleAddClaim}
+          />
+        )}
       </div>
 
-      <Toast message={toastMsg} />
+      <Toast toast={toast} />
     </div>
   );
 };
