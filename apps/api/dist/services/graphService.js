@@ -1,213 +1,335 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.graphService = void 0;
-const uuid_1 = require("uuid");
-// In-memory data store for local development & demonstration
-class GraphService {
-    topics = new Map();
-    constructor() {
-        this.seedDefaultTopic();
+exports.getOrCreateUser = getOrCreateUser;
+exports.getTopic = getTopic;
+exports.getAllTopics = getAllTopics;
+exports.createTopic = createTopic;
+exports.addClaimNode = addClaimNode;
+exports.voteNode = voteNode;
+exports.forkTopic = forkTopic;
+const db_js_1 = require("../db.js");
+// -----------------------------------------------------------------------
+// Ensure user exists in DB
+// -----------------------------------------------------------------------
+async function getOrCreateUser(userId, username) {
+    const id = userId || 'system-user-0000-0000-000000000000';
+    const name = username || (id === 'system-user-0000-0000-000000000000' ? 'system' : `User_${id.slice(0, 6)}`);
+    const email = `${name.toLowerCase()}@argus.local`;
+    const existing = await db_js_1.db.query('SELECT id, username, email, reputation FROM users WHERE id = $1', [id]);
+    if (existing.rowCount > 0) {
+        return existing.rows[0];
     }
-    seedDefaultTopic() {
-        const topicId = 'mars-vs-earth';
-        const rootNodeId = 'root';
-        const defaultNodes = [
-            {
-                id: 'root',
-                parent: null,
-                edgeType: 'root',
-                x: 610,
-                y: 40,
-                content: "Humanity should prioritize colonizing Mars over repairing Earth's climate.",
-                support: 340,
-                contest: 210,
-                steel: true,
-                createdAt: new Date().toISOString()
-            },
-            {
-                id: 'n1',
-                parent: 'root',
-                edgeType: 'supports',
-                x: 90,
-                y: 300,
-                content: "A multi-planet species is far less likely to go extinct from any single catastrophe.",
-                support: 512,
-                contest: 88,
-                steel: true,
-                createdAt: new Date().toISOString()
-            },
-            {
-                id: 'n2',
-                parent: 'root',
-                edgeType: 'refutes',
-                x: 460,
-                y: 300,
-                content: "Every dollar spent on Mars is a dollar not spent solving a crisis we already know is solvable.",
-                support: 405,
-                contest: 140,
-                steel: true,
-                createdAt: new Date().toISOString()
-            },
-            {
-                id: 'n3',
-                parent: 'root',
-                edgeType: 'clarifies',
-                x: 830,
-                y: 300,
-                content: "This isn't really either/or — space agencies are under 0.1% of relevant national budgets combined.",
-                support: 180,
-                contest: 30,
-                steel: false,
-                createdAt: new Date().toISOString()
-            },
-            {
-                id: 'n4',
-                parent: 'root',
-                edgeType: 'refutes',
-                x: 1160,
-                y: 300,
-                content: "Fixing Earth doesn't guard against non-climate extinction risks like asteroids or supervolcanoes.",
-                support: 260,
-                contest: 190,
-                steel: false,
-                createdAt: new Date().toISOString()
-            },
-            {
-                id: 'n1a',
-                parent: 'n1',
-                edgeType: 'evidence',
-                x: 90,
-                y: 560,
-                content: "Mars colonies won't be self-sufficient for at least 50 years — this is a bet on unproven timelines.",
-                support: 60,
-                contest: 240,
-                steel: false,
-                createdAt: new Date().toISOString()
-            },
-            {
-                id: 'n2a',
-                parent: 'n2',
-                edgeType: 'supports',
-                x: 460,
-                y: 560,
-                content: "Climate mitigation technology is proven and scaling. Mars life-support technology is not.",
-                support: 220,
-                contest: 40,
-                steel: true,
-                createdAt: new Date().toISOString()
-            }
-        ];
-        this.topics.set(topicId, {
-            id: topicId,
-            title: "Should humanity prioritize colonizing Mars over repairing Earth's climate?",
-            rootNodeId,
-            forkCount: 0,
-            createdAt: new Date().toISOString(),
-            nodes: defaultNodes
-        });
+    const created = await db_js_1.db.query(`INSERT INTO users (id, username, email, reputation)
+     VALUES ($1, $2, $3, 10)
+     ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username
+     RETURNING id, username, email, reputation`, [id, name, email]);
+    return created.rows[0];
+}
+// Helper to convert row to ClaimNode with optional userVote
+function rowToNode(row, userVoteMap) {
+    const id = row.id;
+    return {
+        id,
+        parent: row.parent_id ?? null,
+        edgeType: row.edge_type ?? 'supports',
+        x: Number(row.pos_x),
+        y: Number(row.pos_y),
+        content: row.content,
+        support: Number(row.support_score),
+        contest: Number(row.contest_score),
+        steel: Boolean(row.is_steel),
+        userVote: userVoteMap ? userVoteMap.get(id) || null : null,
+        authorId: row.author_id || 'system',
+        createdAt: row.created_at.toISOString(),
+    };
+}
+// -----------------------------------------------------------------------
+// getTopic — fetch single topic with nodes and active user's votes
+// -----------------------------------------------------------------------
+async function getTopic(id, currentUserId) {
+    const topicResult = await db_js_1.db.query('SELECT id, title, root_node_id, fork_count, created_at FROM topics WHERE id = $1', [id]);
+    if (topicResult.rowCount === 0)
+        return null;
+    const t = topicResult.rows[0];
+    const nodesResult = await db_js_1.db.query(`SELECT id, parent_id, author_id, edge_type, pos_x, pos_y, content,
+            support_score, contest_score, is_steel, created_at
+     FROM nodes
+     WHERE topic_id = $1 AND status = 'ACTIVE'
+     ORDER BY pos_y, pos_x`, [id]);
+    // Fetch current user's votes for nodes in this topic
+    const userVoteMap = new Map();
+    if (currentUserId) {
+        const votesResult = await db_js_1.db.query('SELECT node_id, vote_type FROM votes WHERE user_id = $1', [currentUserId]);
+        for (const v of votesResult.rows) {
+            userVoteMap.set(v.node_id, v.vote_type.toLowerCase());
+        }
     }
-    getTopic(id) {
-        return this.topics.get(id);
-    }
-    getAllTopics() {
-        return Array.from(this.topics.values());
-    }
-    createTopic(title, rootClaim) {
-        const topicId = (0, uuid_1.v4)();
-        const rootNodeId = (0, uuid_1.v4)();
-        const rootNode = {
-            id: rootNodeId,
-            parent: null,
-            edgeType: 'root',
-            x: 610,
-            y: 40,
-            content: rootClaim,
-            support: 1,
-            contest: 0,
-            steel: true,
-            createdAt: new Date().toISOString()
-        };
-        const topic = {
+    return {
+        id: t.id,
+        title: t.title,
+        rootNodeId: t.root_node_id,
+        forkCount: t.fork_count,
+        createdAt: t.created_at.toISOString(),
+        nodes: nodesResult.rows.map(row => rowToNode(row, userVoteMap)),
+    };
+}
+// -----------------------------------------------------------------------
+// getAllTopics
+// -----------------------------------------------------------------------
+async function getAllTopics() {
+    const result = await db_js_1.db.query('SELECT id, title, root_node_id, fork_count, created_at FROM topics ORDER BY created_at DESC');
+    return result.rows.map((t) => ({
+        id: t.id,
+        title: t.title,
+        rootNodeId: t.root_node_id,
+        forkCount: t.fork_count,
+        createdAt: t.created_at.toISOString(),
+    }));
+}
+// -----------------------------------------------------------------------
+// createTopic
+// -----------------------------------------------------------------------
+async function createTopic(title, rootClaim, authorId) {
+    await getOrCreateUser(authorId);
+    const client = await db_js_1.db.connect();
+    try {
+        await client.query('BEGIN');
+        const topicResult = await client.query(`INSERT INTO topics (title, author_id)
+       VALUES ($1, $2)
+       RETURNING id, created_at`, [title, authorId]);
+        const topicId = topicResult.rows[0].id;
+        const topicCreatedAt = topicResult.rows[0].created_at;
+        const nodeResult = await client.query(`INSERT INTO nodes (topic_id, parent_id, author_id, content, edge_type, pos_x, pos_y, support_score, is_steel)
+       VALUES ($1, NULL, $2, $3, 'root', 470, 40, 1, TRUE)
+       RETURNING id, created_at`, [topicId, authorId, rootClaim]);
+        const rootNodeId = nodeResult.rows[0].id;
+        // Record author's initial support vote
+        await client.query(`INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, 'SUPPORT')`, [rootNodeId, authorId]);
+        await client.query('UPDATE topics SET root_node_id = $1 WHERE id = $2', [rootNodeId, topicId]);
+        await client.query('COMMIT');
+        return {
             id: topicId,
             title,
             rootNodeId,
             forkCount: 0,
-            createdAt: new Date().toISOString(),
-            nodes: [rootNode]
+            createdAt: topicCreatedAt.toISOString(),
+            nodes: [
+                {
+                    id: rootNodeId,
+                    parent: null,
+                    edgeType: 'root',
+                    x: 470,
+                    y: 40,
+                    content: rootClaim,
+                    support: 1,
+                    contest: 0,
+                    steel: true,
+                    userVote: 'support',
+                    authorId,
+                    createdAt: nodeResult.rows[0].created_at.toISOString(),
+                },
+            ],
         };
-        this.topics.set(topicId, topic);
-        return topic;
     }
-    addClaimNode(topicId, parentId, edgeType, content) {
-        const topic = this.topics.get(topicId);
-        if (!topic) {
-            throw new Error(`Topic not found: ${topicId}`);
-        }
-        const parentNode = topic.nodes.find(n => n.id === parentId);
-        if (!parentNode) {
-            throw new Error(`Parent claim node not found: ${parentId}`);
-        }
-        const siblings = topic.nodes.filter(n => n.parent === parentId);
-        const newNode = {
-            id: 'node-' + (0, uuid_1.v4)().slice(0, 8),
+    catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    }
+    finally {
+        client.release();
+    }
+}
+// -----------------------------------------------------------------------
+// addClaimNode
+// -----------------------------------------------------------------------
+async function addClaimNode(topicId, parentId, authorId, edgeType, content) {
+    await getOrCreateUser(authorId);
+    const parentResult = await db_js_1.db.query('SELECT pos_x, pos_y FROM nodes WHERE id = $1 AND topic_id = $2', [parentId, topicId]);
+    if (parentResult.rowCount === 0)
+        throw new Error(`Parent node not found: ${parentId}`);
+    const parentX = Number(parentResult.rows[0].pos_x);
+    const parentY = Number(parentResult.rows[0].pos_y);
+    const siblingsResult = await db_js_1.db.query('SELECT COUNT(*) as count FROM nodes WHERE parent_id = $1 AND topic_id = $2', [parentId, topicId]);
+    const siblingCount = parseInt(siblingsResult.rows[0].count, 10);
+    const newX = parentX + siblingCount * 230;
+    const newY = parentY + 260;
+    const client = await db_js_1.db.connect();
+    try {
+        await client.query('BEGIN');
+        const insertResult = await client.query(`INSERT INTO nodes (topic_id, parent_id, author_id, content, edge_type, pos_x, pos_y, support_score, contest_score, is_steel)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 1, 0, FALSE)
+       RETURNING id, created_at`, [topicId, parentId, authorId, content, edgeType, newX, newY]);
+        const newNodeId = insertResult.rows[0].id;
+        // Record author's initial vote
+        await client.query(`INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, 'SUPPORT')`, [newNodeId, authorId]);
+        await client.query('COMMIT');
+        return {
+            id: newNodeId,
             parent: parentId,
             edgeType,
-            x: parentNode.x + siblings.length * 230,
-            y: parentNode.y + 260,
+            x: newX,
+            y: newY,
             content,
             support: 1,
             contest: 0,
             steel: false,
-            createdAt: new Date().toISOString()
+            userVote: 'support',
+            authorId,
+            createdAt: insertResult.rows[0].created_at.toISOString(),
         };
-        this.recalculateSteelman(newNode);
-        topic.nodes.push(newNode);
-        return newNode;
     }
-    voteNode(topicId, nodeId, voteType) {
-        const topic = this.topics.get(topicId);
-        if (!topic) {
-            throw new Error(`Topic not found: ${topicId}`);
-        }
-        const node = topic.nodes.find(n => n.id === nodeId);
-        if (!node) {
-            throw new Error(`Node not found: ${nodeId}`);
-        }
-        if (voteType === 'support') {
-            node.support += 1;
-        }
-        else {
-            node.contest += 1;
-        }
-        this.recalculateSteelman(node);
-        return node;
+    catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
     }
-    forkTopic(topicId) {
-        const original = this.topics.get(topicId);
-        if (!original) {
-            throw new Error(`Topic not found: ${topicId}`);
-        }
-        original.forkCount += 1;
-        const forkedId = `fork-${(0, uuid_1.v4)().slice(0, 8)}`;
-        const clonedNodes = JSON.parse(JSON.stringify(original.nodes));
-        const forkedTopic = {
-            id: forkedId,
-            title: `${original.title} (Fork)`,
-            rootNodeId: original.rootNodeId,
-            forkCount: 0,
-            createdAt: new Date().toISOString(),
-            nodes: clonedNodes
-        };
-        this.topics.set(forkedId, forkedTopic);
-        return forkedTopic;
-    }
-    recalculateSteelman(node) {
-        if (node.edgeType === 'root') {
-            node.steel = true;
-            return;
-        }
-        // Steelman rule: support > contest * 1.8
-        node.steel = node.support > node.contest * 1.8;
+    finally {
+        client.release();
     }
 }
-exports.graphService = new GraphService();
+// -----------------------------------------------------------------------
+// voteNode — ENFORCED DEDUPLICATED VOTING
+// - Same vote again → remove vote (toggle off)
+// - Switch vote type → update vote (Support ↔ Contest)
+// - New vote → insert vote
+// Recalculates exact score tallies from votes table!
+// -----------------------------------------------------------------------
+async function voteNode(topicId, nodeId, userId, voteType) {
+    await getOrCreateUser(userId);
+    const dbVoteType = voteType.toUpperCase(); // 'SUPPORT' or 'CONTEST'
+    const client = await db_js_1.db.connect();
+    try {
+        await client.query('BEGIN');
+        // 1. Check existing vote by user on this node
+        const existingVote = await client.query('SELECT id, vote_type FROM votes WHERE node_id = $1 AND user_id = $2', [nodeId, userId]);
+        let activeUserVote = voteType;
+        if (existingVote.rowCount > 0) {
+            const currentType = existingVote.rows[0].vote_type;
+            if (currentType === dbVoteType) {
+                // Toggle OFF vote if clicking same button again
+                await client.query('DELETE FROM votes WHERE id = $1', [existingVote.rows[0].id]);
+                activeUserVote = null;
+            }
+            else {
+                // Switch vote type (e.g. SUPPORT -> CONTEST)
+                await client.query('UPDATE votes SET vote_type = $1 WHERE id = $2', [
+                    dbVoteType,
+                    existingVote.rows[0].id,
+                ]);
+            }
+        }
+        else {
+            // Insert new vote
+            await client.query('INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, $3)', [nodeId, userId, dbVoteType]);
+        }
+        // 2. Recalculate exact vote counts from DB
+        const counts = await client.query('SELECT vote_type, COUNT(*) as count FROM votes WHERE node_id = $1 GROUP BY vote_type', [nodeId]);
+        let supportScore = 0;
+        let contestScore = 0;
+        for (const row of counts.rows) {
+            if (row.vote_type === 'SUPPORT')
+                supportScore = parseInt(row.count, 10);
+            if (row.vote_type === 'CONTEST')
+                contestScore = parseInt(row.count, 10);
+        }
+        // 3. Compute steelman standing
+        // Root node is always steel; otherwise support > contest * 1.8
+        const nodeInfo = await client.query('SELECT edge_type FROM nodes WHERE id = $1', [nodeId]);
+        const isRoot = nodeInfo.rows[0]?.edge_type === 'root';
+        const isSteel = isRoot || supportScore > contestScore * 1.8;
+        // 4. Update nodes table
+        const updated = await client.query(`UPDATE nodes
+       SET support_score = $1,
+           contest_score = $2,
+           is_steel = $3
+       WHERE id = $4 AND topic_id = $5
+       RETURNING id, parent_id, author_id, edge_type, pos_x, pos_y, content,
+                 support_score, contest_score, is_steel, created_at`, [supportScore, contestScore, isSteel, nodeId, topicId]);
+        await client.query('COMMIT');
+        if (updated.rowCount === 0)
+            throw new Error(`Node not found: ${nodeId}`);
+        const node = rowToNode(updated.rows[0]);
+        node.userVote = activeUserVote;
+        return node;
+    }
+    catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    }
+    finally {
+        client.release();
+    }
+}
+// -----------------------------------------------------------------------
+// forkTopic
+// -----------------------------------------------------------------------
+async function forkTopic(topicId, authorId) {
+    await getOrCreateUser(authorId);
+    const original = await getTopic(topicId, authorId);
+    if (!original)
+        throw new Error(`Topic not found: ${topicId}`);
+    const client = await db_js_1.db.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('UPDATE topics SET fork_count = fork_count + 1 WHERE id = $1', [topicId]);
+        const topicResult = await client.query(`INSERT INTO topics (title, author_id)
+       VALUES ($1, $2)
+       RETURNING id, created_at`, [`${original.title} (Fork)`, authorId]);
+        const newTopicId = topicResult.rows[0].id;
+        const newTopicCreatedAt = topicResult.rows[0].created_at;
+        const idMap = new Map();
+        const clonedNodes = [];
+        for (const node of original.nodes) {
+            const nodeResult = await client.query(`INSERT INTO nodes (topic_id, parent_id, author_id, content, edge_type,
+                            pos_x, pos_y, support_score, contest_score, is_steel)
+         VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id, created_at`, [
+                newTopicId,
+                authorId,
+                node.content,
+                node.edgeType,
+                node.x,
+                node.y,
+                node.support,
+                node.contest,
+                node.steel,
+            ]);
+            const newId = nodeResult.rows[0].id;
+            idMap.set(node.id, newId);
+            clonedNodes.push({
+                ...node,
+                id: newId,
+                parent: node.parent,
+                createdAt: nodeResult.rows[0].created_at.toISOString(),
+            });
+        }
+        for (const node of original.nodes) {
+            if (node.parent) {
+                const newId = idMap.get(node.id);
+                const newParentId = idMap.get(node.parent);
+                await client.query('UPDATE nodes SET parent_id = $1 WHERE id = $2', [newParentId, newId]);
+            }
+        }
+        const newRootId = idMap.get(original.rootNodeId);
+        await client.query('UPDATE topics SET root_node_id = $1 WHERE id = $2', [newRootId, newTopicId]);
+        await client.query('COMMIT');
+        return {
+            id: newTopicId,
+            title: `${original.title} (Fork)`,
+            rootNodeId: newRootId,
+            forkCount: 0,
+            createdAt: newTopicCreatedAt.toISOString(),
+            nodes: clonedNodes.map((n) => ({
+                ...n,
+                id: idMap.get(n.id) ?? n.id,
+                parent: n.parent ? idMap.get(n.parent) ?? null : null,
+            })),
+        };
+    }
+    catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    }
+    finally {
+        client.release();
+    }
+}

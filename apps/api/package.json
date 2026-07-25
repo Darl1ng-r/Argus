@@ -11,6 +11,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.19.2",
+    "isomorphic-dompurify": "^3.19.0",
     "pg": "^8.22.0",
     "uuid": "^9.0.1"
   },

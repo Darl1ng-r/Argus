@@ -12,8 +12,15 @@ import {
   getOrCreateUser,
   User,
 } from './services/graphService.js';
+import {
+  sanitizeClaimContent,
+  sanitizeTopicTitle,
+  validateEdgeType,
+  validateVoteType,
+  validateIdentifier,
+  ValidationError,
+} from './utils/sanitizer.js';
 
-// Extend Express Request type to include user context
 declare global {
   namespace Express {
     interface Request {
@@ -26,12 +33,10 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '100kb' })); // Restrict JSON payload size to 100KB to prevent memory exhaustion DoS
 
 // -----------------------------------------------------------------------
 // Authentication Middleware
-// Extracts identity from `X-User-Id` header or `Authorization: Bearer <id>`
-// Automatically provisions user profile in PostgreSQL database if missing
 // -----------------------------------------------------------------------
 app.use(async (req: Request, _res: Response, next: NextFunction) => {
   try {
@@ -66,7 +71,7 @@ app.get('/health', async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/me - Return active session user profile
+// GET /api/me - Active user session profile
 app.get('/api/me', (req: Request, res: Response) => {
   if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
   res.json(req.user);
@@ -83,77 +88,90 @@ app.get('/api/topics', async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/topics/:id - Fetch topic with user-specific vote states attached
+// GET /api/topics/:id - Fetch topic with sanitized ID parameter
 app.get('/api/topics/:id', async (req: Request, res: Response) => {
   try {
+    const topicId = validateIdentifier(req.params.id, 'topicId');
     const currentUserId = req.user?.id;
-    const topic = await getTopic(req.params.id, currentUserId);
+    const topic = await getTopic(topicId, currentUserId);
     if (!topic) return res.status(404).json({ error: 'Topic not found' });
     res.json(topic);
   } catch (err: unknown) {
+    if (err instanceof ValidationError) {
+      return res.status(400).json({ error: err.message });
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ error: message });
   }
 });
 
-// POST /api/topics - Create topic
+// POST /api/topics - Create topic with input validation and HTML stripping
 app.post('/api/topics', async (req: Request, res: Response) => {
   try {
-    const { title, rootClaim } = req.body as { title?: string; rootClaim?: string };
-    if (!title || !rootClaim) {
-      return res.status(400).json({ error: 'title and rootClaim are required' });
-    }
+    const { title, rootClaim } = req.body as { title?: unknown; rootClaim?: unknown };
+    const sanitizedTitle = sanitizeTopicTitle(title);
+    const sanitizedRootClaim = sanitizeClaimContent(rootClaim);
+
     const authorId = req.user?.id || 'system-user-0000-0000-000000000000';
-    const topic = await createTopic(title, rootClaim, authorId);
+    const topic = await createTopic(sanitizedTitle, sanitizedRootClaim, authorId);
     res.status(201).json(topic);
   } catch (err: unknown) {
+    if (err instanceof ValidationError) {
+      return res.status(400).json({ error: err.message });
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ error: message });
   }
 });
 
-// POST /api/topics/:id/nodes - Add claim node
+// POST /api/topics/:id/nodes - Add claim node with input sanitization & edgeType enum validation
 app.post('/api/topics/:id/nodes', async (req: Request, res: Response) => {
   try {
+    const topicId = validateIdentifier(req.params.id, 'topicId');
     const { parentId, edgeType, content } = req.body as {
-      parentId?: string;
-      edgeType?: string;
-      content?: string;
+      parentId?: unknown;
+      edgeType?: unknown;
+      content?: unknown;
     };
-    if (!parentId || !edgeType || !content) {
-      return res.status(400).json({ error: 'parentId, edgeType, and content are required' });
-    }
-    const allowed = ['supports', 'refutes', 'clarifies', 'evidence'];
-    if (!allowed.includes(edgeType)) {
-      return res.status(400).json({ error: `edgeType must be one of: ${allowed.join(', ')}` });
-    }
+
+    const sanitizedParentId = validateIdentifier(parentId, 'parentId');
+    const validatedEdgeType = validateEdgeType(edgeType);
+    const sanitizedContent = sanitizeClaimContent(content);
+
     const authorId = req.user?.id || 'system-user-0000-0000-000000000000';
     const newNode = await addClaimNode(
-      req.params.id,
-      parentId,
+      topicId,
+      sanitizedParentId,
       authorId,
-      edgeType as 'supports' | 'refutes' | 'clarifies' | 'evidence',
-      content
+      validatedEdgeType,
+      sanitizedContent
     );
     res.status(201).json(newNode);
   } catch (err: unknown) {
+    if (err instanceof ValidationError) {
+      return res.status(400).json({ error: err.message });
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ error: message });
   }
 });
 
-// POST /api/topics/:id/nodes/:nodeId/vote - Deduplicated voting endpoint
+// POST /api/topics/:id/nodes/:nodeId/vote - Vote with strict voteType validation
 app.post('/api/topics/:id/nodes/:nodeId/vote', async (req: Request, res: Response) => {
   try {
-    const { voteType } = req.body as { voteType?: string };
-    if (voteType !== 'support' && voteType !== 'contest') {
-      return res.status(400).json({ error: "voteType must be 'support' or 'contest'" });
-    }
+    const topicId = validateIdentifier(req.params.id, 'topicId');
+    const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
+    const { voteType } = req.body as { voteType?: unknown };
 
+    const validatedVoteType = validateVoteType(voteType);
     const userId = req.user?.id || 'system-user-0000-0000-000000000000';
-    const updatedNode = await voteNode(req.params.id, req.params.nodeId, userId, voteType);
+
+    const updatedNode = await voteNode(topicId, nodeId, userId, validatedVoteType);
     res.json(updatedNode);
   } catch (err: unknown) {
+    if (err instanceof ValidationError) {
+      return res.status(400).json({ error: err.message });
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ error: message });
   }
@@ -162,10 +180,14 @@ app.post('/api/topics/:id/nodes/:nodeId/vote', async (req: Request, res: Respons
 // POST /api/topics/:id/fork
 app.post('/api/topics/:id/fork', async (req: Request, res: Response) => {
   try {
+    const topicId = validateIdentifier(req.params.id, 'topicId');
     const authorId = req.user?.id || 'system-user-0000-0000-000000000000';
-    const forked = await forkTopic(req.params.id, authorId);
+    const forked = await forkTopic(topicId, authorId);
     res.status(201).json(forked);
   } catch (err: unknown) {
+    if (err instanceof ValidationError) {
+      return res.status(400).json({ error: err.message });
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ error: message });
   }
