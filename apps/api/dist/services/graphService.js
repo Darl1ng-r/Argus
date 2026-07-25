@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getOrCreateUser = getOrCreateUser;
+exports.detectCycle = detectCycle;
 exports.getTopic = getTopic;
 exports.getAllTopics = getAllTopics;
 exports.createTopic = createTopic;
@@ -8,6 +9,7 @@ exports.addClaimNode = addClaimNode;
 exports.voteNode = voteNode;
 exports.forkTopic = forkTopic;
 const db_js_1 = require("../db.js");
+const sanitizer_js_1 = require("../utils/sanitizer.js");
 // -----------------------------------------------------------------------
 // Ensure user exists in DB
 // -----------------------------------------------------------------------
@@ -25,7 +27,6 @@ async function getOrCreateUser(userId, username) {
      RETURNING id, username, email, reputation`, [id, name, email]);
     return created.rows[0];
 }
-// Helper to convert row to ClaimNode with optional userVote
 function rowToNode(row, userVoteMap) {
     const id = row.id;
     return {
@@ -44,7 +45,33 @@ function rowToNode(row, userVoteMap) {
     };
 }
 // -----------------------------------------------------------------------
-// getTopic — fetch single topic with nodes and active user's votes
+// CYCLE DETECTION ENGINE (Recursive CTE)
+// Checks if connecting node `fromNodeId` -> `toNodeId` would close a loop
+// Argus argument maps are Directed Acyclic Graphs (DAGs)
+// -----------------------------------------------------------------------
+async function detectCycle(topicId, proposedParentId, proposedChildId) {
+    if (proposedChildId && proposedParentId === proposedChildId) {
+        return true; // Self-loop
+    }
+    if (!proposedChildId) {
+        return false; // Adding a brand new node to existing parent cannot create a cycle
+    }
+    // Check if proposedChildId is an ancestor of proposedParentId
+    const result = await db_js_1.db.query(`WITH RECURSIVE ancestors AS (
+       SELECT id, parent_id FROM nodes WHERE id = $1 AND topic_id = $3
+       UNION ALL
+       SELECT n.id, n.parent_id
+       FROM nodes n
+       JOIN ancestors a ON a.parent_id = n.id
+       WHERE n.topic_id = $3
+     )
+     SELECT EXISTS (
+       SELECT 1 FROM ancestors WHERE id = $2
+     ) AS would_create_cycle`, [proposedParentId, proposedChildId, topicId]);
+    return Boolean(result.rows[0]?.would_create_cycle);
+}
+// -----------------------------------------------------------------------
+// getTopic
 // -----------------------------------------------------------------------
 async function getTopic(id, currentUserId) {
     const topicResult = await db_js_1.db.query('SELECT id, title, root_node_id, fork_count, created_at FROM topics WHERE id = $1', [id]);
@@ -56,7 +83,6 @@ async function getTopic(id, currentUserId) {
      FROM nodes
      WHERE topic_id = $1 AND status = 'ACTIVE'
      ORDER BY pos_y, pos_x`, [id]);
-    // Fetch current user's votes for nodes in this topic
     const userVoteMap = new Map();
     if (currentUserId) {
         const votesResult = await db_js_1.db.query('SELECT node_id, vote_type FROM votes WHERE user_id = $1', [currentUserId]);
@@ -103,7 +129,6 @@ async function createTopic(title, rootClaim, authorId) {
        VALUES ($1, NULL, $2, $3, 'root', 470, 40, 1, TRUE)
        RETURNING id, created_at`, [topicId, authorId, rootClaim]);
         const rootNodeId = nodeResult.rows[0].id;
-        // Record author's initial support vote
         await client.query(`INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, 'SUPPORT')`, [rootNodeId, authorId]);
         await client.query('UPDATE topics SET root_node_id = $1 WHERE id = $2', [rootNodeId, topicId]);
         await client.query('COMMIT');
@@ -140,13 +165,13 @@ async function createTopic(title, rootClaim, authorId) {
     }
 }
 // -----------------------------------------------------------------------
-// addClaimNode
+// addClaimNode — with Cycle Check Safeguard
 // -----------------------------------------------------------------------
 async function addClaimNode(topicId, parentId, authorId, edgeType, content) {
     await getOrCreateUser(authorId);
     const parentResult = await db_js_1.db.query('SELECT pos_x, pos_y FROM nodes WHERE id = $1 AND topic_id = $2', [parentId, topicId]);
     if (parentResult.rowCount === 0)
-        throw new Error(`Parent node not found: ${parentId}`);
+        throw new sanitizer_js_1.ValidationError(`Parent node not found: ${parentId}`);
     const parentX = Number(parentResult.rows[0].pos_x);
     const parentY = Number(parentResult.rows[0].pos_y);
     const siblingsResult = await db_js_1.db.query('SELECT COUNT(*) as count FROM nodes WHERE parent_id = $1 AND topic_id = $2', [parentId, topicId]);
@@ -160,7 +185,6 @@ async function addClaimNode(topicId, parentId, authorId, edgeType, content) {
        VALUES ($1, $2, $3, $4, $5, $6, $7, 1, 0, FALSE)
        RETURNING id, created_at`, [topicId, parentId, authorId, content, edgeType, newX, newY]);
         const newNodeId = insertResult.rows[0].id;
-        // Record author's initial vote
         await client.query(`INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, 'SUPPORT')`, [newNodeId, authorId]);
         await client.query('COMMIT');
         return {
@@ -187,30 +211,23 @@ async function addClaimNode(topicId, parentId, authorId, edgeType, content) {
     }
 }
 // -----------------------------------------------------------------------
-// voteNode — ENFORCED DEDUPLICATED VOTING
-// - Same vote again → remove vote (toggle off)
-// - Switch vote type → update vote (Support ↔ Contest)
-// - New vote → insert vote
-// Recalculates exact score tallies from votes table!
+// voteNode
 // -----------------------------------------------------------------------
 async function voteNode(topicId, nodeId, userId, voteType) {
     await getOrCreateUser(userId);
-    const dbVoteType = voteType.toUpperCase(); // 'SUPPORT' or 'CONTEST'
+    const dbVoteType = voteType.toUpperCase();
     const client = await db_js_1.db.connect();
     try {
         await client.query('BEGIN');
-        // 1. Check existing vote by user on this node
         const existingVote = await client.query('SELECT id, vote_type FROM votes WHERE node_id = $1 AND user_id = $2', [nodeId, userId]);
         let activeUserVote = voteType;
         if (existingVote.rowCount > 0) {
             const currentType = existingVote.rows[0].vote_type;
             if (currentType === dbVoteType) {
-                // Toggle OFF vote if clicking same button again
                 await client.query('DELETE FROM votes WHERE id = $1', [existingVote.rows[0].id]);
                 activeUserVote = null;
             }
             else {
-                // Switch vote type (e.g. SUPPORT -> CONTEST)
                 await client.query('UPDATE votes SET vote_type = $1 WHERE id = $2', [
                     dbVoteType,
                     existingVote.rows[0].id,
@@ -218,10 +235,8 @@ async function voteNode(topicId, nodeId, userId, voteType) {
             }
         }
         else {
-            // Insert new vote
             await client.query('INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, $3)', [nodeId, userId, dbVoteType]);
         }
-        // 2. Recalculate exact vote counts from DB
         const counts = await client.query('SELECT vote_type, COUNT(*) as count FROM votes WHERE node_id = $1 GROUP BY vote_type', [nodeId]);
         let supportScore = 0;
         let contestScore = 0;
@@ -231,12 +246,9 @@ async function voteNode(topicId, nodeId, userId, voteType) {
             if (row.vote_type === 'CONTEST')
                 contestScore = parseInt(row.count, 10);
         }
-        // 3. Compute steelman standing
-        // Root node is always steel; otherwise support > contest * 1.8
         const nodeInfo = await client.query('SELECT edge_type FROM nodes WHERE id = $1', [nodeId]);
         const isRoot = nodeInfo.rows[0]?.edge_type === 'root';
         const isSteel = isRoot || supportScore > contestScore * 1.8;
-        // 4. Update nodes table
         const updated = await client.query(`UPDATE nodes
        SET support_score = $1,
            contest_score = $2,
@@ -246,7 +258,7 @@ async function voteNode(topicId, nodeId, userId, voteType) {
                  support_score, contest_score, is_steel, created_at`, [supportScore, contestScore, isSteel, nodeId, topicId]);
         await client.query('COMMIT');
         if (updated.rowCount === 0)
-            throw new Error(`Node not found: ${nodeId}`);
+            throw new sanitizer_js_1.ValidationError(`Node not found: ${nodeId}`);
         const node = rowToNode(updated.rows[0]);
         node.userVote = activeUserVote;
         return node;
@@ -266,7 +278,7 @@ async function forkTopic(topicId, authorId) {
     await getOrCreateUser(authorId);
     const original = await getTopic(topicId, authorId);
     if (!original)
-        throw new Error(`Topic not found: ${topicId}`);
+        throw new sanitizer_js_1.ValidationError(`Topic not found: ${topicId}`);
     const client = await db_js_1.db.connect();
     try {
         await client.query('BEGIN');

@@ -11,8 +11,27 @@ const graphService_js_1 = require("./services/graphService.js");
 const sanitizer_js_1 = require("./utils/sanitizer.js");
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 4000;
-app.use((0, cors_1.default)());
-app.use(express_1.default.json({ limit: '100kb' })); // Restrict JSON payload size to 100KB to prevent memory exhaustion DoS
+// -----------------------------------------------------------------------
+// CORS Security Configuration
+// Restricts allowed origin strictly to configured web domain in production
+// -----------------------------------------------------------------------
+const allowedOrigins = [
+    process.env.CORS_ORIGIN || 'http://localhost:5173',
+    'http://127.0.0.1:5173',
+];
+app.use((0, cors_1.default)({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps, curl, or server-to-server)
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        }
+        else {
+            callback(new sanitizer_js_1.ValidationError(`CORS blocked request from origin: ${origin}`));
+        }
+    },
+    credentials: true,
+}));
+app.use(express_1.default.json({ limit: '100kb' }));
 // -----------------------------------------------------------------------
 // Authentication Middleware
 // -----------------------------------------------------------------------
@@ -46,13 +65,13 @@ app.get('/health', async (_req, res) => {
         res.status(503).json({ status: 'error', db: 'disconnected' });
     }
 });
-// GET /api/me - Active user session profile
+// GET /api/me
 app.get('/api/me', (req, res) => {
     if (!req.user)
         return res.status(401).json({ error: 'Unauthenticated' });
     res.json(req.user);
 });
-// GET /api/topics - List all topics
+// GET /api/topics
 app.get('/api/topics', async (_req, res) => {
     try {
         const topics = await (0, graphService_js_1.getAllTopics)();
@@ -63,7 +82,7 @@ app.get('/api/topics', async (_req, res) => {
         res.status(500).json({ error: message });
     }
 });
-// GET /api/topics/:id - Fetch topic with sanitized ID parameter
+// GET /api/topics/:id
 app.get('/api/topics/:id', async (req, res) => {
     try {
         const topicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'topicId');
@@ -81,7 +100,7 @@ app.get('/api/topics/:id', async (req, res) => {
         res.status(500).json({ error: message });
     }
 });
-// POST /api/topics - Create topic with input validation and HTML stripping
+// POST /api/topics - Create topic
 app.post('/api/topics', async (req, res) => {
     try {
         const { title, rootClaim } = req.body;
@@ -99,7 +118,7 @@ app.post('/api/topics', async (req, res) => {
         res.status(500).json({ error: message });
     }
 });
-// POST /api/topics/:id/nodes - Add claim node with input sanitization & edgeType enum validation
+// POST /api/topics/:id/nodes - Add claim node with Cycle Detection check
 app.post('/api/topics/:id/nodes', async (req, res) => {
     try {
         const topicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'topicId');
@@ -107,6 +126,11 @@ app.post('/api/topics/:id/nodes', async (req, res) => {
         const sanitizedParentId = (0, sanitizer_js_1.validateIdentifier)(parentId, 'parentId');
         const validatedEdgeType = (0, sanitizer_js_1.validateEdgeType)(edgeType);
         const sanitizedContent = (0, sanitizer_js_1.sanitizeClaimContent)(content);
+        // Run Cycle Detection check
+        const wouldCycle = await (0, graphService_js_1.detectCycle)(topicId, sanitizedParentId);
+        if (wouldCycle) {
+            throw new sanitizer_js_1.ValidationError('Circular reasoning blocked: connecting these claims creates a cycle. Argus argument graphs must be Directed Acyclic Graphs (DAGs).');
+        }
         const authorId = req.user?.id || 'system-user-0000-0000-000000000000';
         const newNode = await (0, graphService_js_1.addClaimNode)(topicId, sanitizedParentId, authorId, validatedEdgeType, sanitizedContent);
         res.status(201).json(newNode);
@@ -119,7 +143,28 @@ app.post('/api/topics/:id/nodes', async (req, res) => {
         res.status(500).json({ error: message });
     }
 });
-// POST /api/topics/:id/nodes/:nodeId/vote - Vote with strict voteType validation
+// GET /api/topics/:id/cycle-check - Cycle check endpoint for graph editor
+app.get('/api/topics/:id/cycle-check', async (req, res) => {
+    try {
+        const topicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'topicId');
+        const { parentId, childId } = req.query;
+        if (!parentId || !childId) {
+            return res.status(400).json({ error: 'parentId and childId query params are required' });
+        }
+        const sParent = (0, sanitizer_js_1.validateIdentifier)(parentId, 'parentId');
+        const sChild = (0, sanitizer_js_1.validateIdentifier)(childId, 'childId');
+        const wouldCycle = await (0, graphService_js_1.detectCycle)(topicId, sParent, sChild);
+        res.json({ wouldCycle, parentId: sParent, childId: sChild });
+    }
+    catch (err) {
+        if (err instanceof sanitizer_js_1.ValidationError) {
+            return res.status(400).json({ error: err.message });
+        }
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        res.status(500).json({ error: message });
+    }
+});
+// POST /api/topics/:id/nodes/:nodeId/vote
 app.post('/api/topics/:id/nodes/:nodeId/vote', async (req, res) => {
     try {
         const topicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'topicId');
