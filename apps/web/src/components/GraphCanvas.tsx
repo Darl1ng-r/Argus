@@ -36,12 +36,33 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [dragMoved, setDragMoved] = useState(false);
 
+  const containerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   const estimateHeight = (n: ClaimNode) => {
     const lines = Math.ceil(n.content.length / 30);
     return 60 + lines * 15;
   };
+
+  // Auto-scroll / center canvas on target node when selectedId changes or on initial deep link load
+  useEffect(() => {
+    if (!selectedId || !containerRef.current) return;
+    const targetNode = nodes.find((n) => n.id === selectedId);
+    if (!targetNode) return;
+
+    const container = containerRef.current;
+    const nodeCenterX = (targetNode.x + 106) * zoom;
+    const nodeCenterY = (targetNode.y + 60) * zoom;
+
+    const scrollX = Math.max(0, nodeCenterX - container.clientWidth / 2);
+    const scrollY = Math.max(0, nodeCenterY - container.clientHeight / 2);
+
+    container.scrollTo({
+      left: scrollX,
+      top: scrollY,
+      behavior: 'smooth'
+    });
+  }, [selectedId, nodes, zoom]);
 
   const handlePointerDown = (e: React.PointerEvent, node: ClaimNode) => {
     e.stopPropagation();
@@ -85,6 +106,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
 
   return (
     <div
+      ref={containerRef}
       className="canvas-area"
       onPointerDown={(e) => {
         if (e.target === e.currentTarget || (e.target as HTMLElement).id === 'graph-wrapper') {
@@ -119,8 +141,8 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             const parent = nodes.find((p) => p.id === n.parent);
             if (!parent) return null;
 
-            const pw = parent.id === 'root' ? 280 : 212;
-            const ph = parent.id === 'root' ? 108 : estimateHeight(parent);
+            const pw = parent.id === 'root' || parent.edgeType === 'root' ? 280 : 212;
+            const ph = parent.id === 'root' || parent.edgeType === 'root' ? 108 : estimateHeight(parent);
             const start = { x: parent.x + pw / 2, y: parent.y + ph };
             const end = { x: n.x + 106, y: n.y };
             const midY = (start.y + end.y) / 2;
@@ -146,7 +168,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
           const meta = EDGE_META[n.edgeType] || EDGE_META.supports;
           const wellSupported = n.support > n.contest * 1.8;
           const isSelected = n.id === selectedId;
-          const isRoot = n.id === 'root';
+          const isRoot = n.edgeType === 'root';
 
           return (
             <div

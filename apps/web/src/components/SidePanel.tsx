@@ -14,13 +14,15 @@ interface SidePanelProps {
   currentUser: User | null;
   onVote: (nodeId: string, type: 'support' | 'contest') => void;
   onAddClaim: (parentId: string, edgeType: EdgeType, content: string) => void;
+  onShareLink?: () => void;
 }
 
 export const SidePanel: React.FC<SidePanelProps> = ({
   selectedNode,
   currentUser,
   onVote,
-  onAddClaim
+  onAddClaim,
+  onShareLink
 }) => {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [edgeType, setEdgeType] = useState<EdgeType>('supports');
@@ -56,7 +58,32 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
   return (
     <aside>
-      <h2>{selectedNode.edgeType === 'root' ? 'THE ROOT CLAIM' : 'SELECTED CLAIM'}</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', paddingBottom: '10px', borderBottom: '1px solid var(--marble-line)' }}>
+        <h2 style={{ margin: 0, padding: 0, border: 'none' }}>
+          {selectedNode.edgeType === 'root' ? 'THE ROOT CLAIM' : 'SELECTED CLAIM'}
+        </h2>
+
+        {onShareLink && (
+          <button
+            onClick={onShareLink}
+            title="Copy deep link URL for this claim"
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--marble-line)',
+              borderRadius: '4px',
+              padding: '3px 8px',
+              fontFamily: 'Inter, sans-serif',
+              fontSize: '11px',
+              color: 'var(--aegean)',
+              cursor: 'pointer',
+              fontWeight: 600
+            }}
+          >
+            🔗 Share Link
+          </button>
+        )}
+      </div>
+
       <div id="panelBody">
         <div className="panel-eyebrow" style={{ color: meta.color }}>
           <span className="dot" style={{ background: meta.color }}></span>

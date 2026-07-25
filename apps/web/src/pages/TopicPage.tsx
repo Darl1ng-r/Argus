@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Header } from '../components/Header';
 import { GraphCanvas } from '../components/GraphCanvas';
 import { SidePanel } from '../components/SidePanel';
@@ -14,6 +14,7 @@ interface TopicPageProps {
 
 export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser }) => {
   const { topicId } = useParams<{ topicId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
 
   const [topic, setTopic] = useState<Topic | null>(null);
@@ -23,6 +24,37 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
+
+  // Initialize ViewMode and SelectedNode from URL Query Parameters on load
+  useEffect(() => {
+    const modeParam = searchParams.get('mode') as ViewMode | null;
+    if (modeParam && ['graph', 'steelman', 'diff'].includes(modeParam)) {
+      setViewMode(modeParam);
+    }
+
+    const nodeParam = searchParams.get('node');
+    if (nodeParam) {
+      setSelectedId(nodeParam);
+    }
+  }, []);
+
+  // Update URL Query Parameters whenever selectedId or viewMode changes
+  const updateUrlParams = useCallback((nodeId: string | null, mode: ViewMode) => {
+    const params: Record<string, string> = {};
+    if (nodeId) params.node = nodeId;
+    if (mode !== 'graph') params.mode = mode;
+    setSearchParams(params, { replace: true });
+  }, [setSearchParams]);
+
+  const handleSelectNode = (id: string | null) => {
+    setSelectedId(id);
+    updateUrlParams(id, viewMode);
+  };
+
+  const handleSelectViewMode = (mode: ViewMode) => {
+    setViewMode(mode);
+    updateUrlParams(selectedId, mode);
+  };
 
   const getAuthHeaders = useCallback(() => {
     const userId = localStorage.getItem('argus_user_id') || 'system';
@@ -75,10 +107,18 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     }, 3200);
   };
 
+  const handleShareLink = () => {
+    const deepLinkUrl = window.location.href;
+    navigator.clipboard.writeText(deepLinkUrl).then(() => {
+      showToast('🔗 Deep link URL copied to clipboard!', 'success');
+    }).catch(() => {
+      showToast(`Deep link: ${deepLinkUrl}`, 'info');
+    });
+  };
+
   const handleVote = async (nodeId: string, voteType: 'support' | 'contest') => {
     if (!topic || !currentUser) return;
 
-    // Snapshot previous topic state for rollback on network error
     const previousTopic = topic;
 
     try {
@@ -109,7 +149,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
       }
     } catch (err: any) {
       console.error('Failed to submit vote to backend', err);
-      setTopic(previousTopic); // Rollback optimistic update
+      setTopic(previousTopic);
       showToast('Network error: Vote could not be saved to server.', 'error');
     }
   };
@@ -127,7 +167,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
       if (res.ok) {
         const newNode: ClaimNode = await res.json();
         setTopic((prev) => (prev ? { ...prev, nodes: [...prev.nodes, newNode] } : null));
-        setSelectedId(newNode.id);
+        handleSelectNode(newNode.id);
         showToast('Claim added to the argument graph.', 'success');
       } else {
         const errData = await res.json();
@@ -189,7 +229,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      {/* Top Bar with Back Link */}
+      {/* Top Bar */}
       <div style={{ background: 'var(--marble-panel)', padding: '6px 28px', borderBottom: '1px solid var(--marble-line)', display: 'flex', alignItems: 'center' }}>
         <button
           onClick={() => navigate('/')}
@@ -214,7 +254,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
         topicTitle={topic?.title || 'Argument Graph'}
         viewMode={viewMode}
         user={currentUser}
-        onSelectViewMode={setViewMode}
+        onSelectViewMode={handleSelectViewMode}
         onFork={handleFork}
         onSwitchUser={onSwitchUser}
       />
@@ -251,7 +291,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
           </div>
         )}
 
-        {/* Loading Canvas Skeleton */}
+        {/* Loading Skeleton */}
         {isLoading && !errorMsg && (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '14px', background: 'var(--marble)' }}>
             <div style={{ fontFamily: 'Cinzel, serif', fontSize: '13px', letterSpacing: '0.12em', color: 'var(--gold)' }}>
@@ -283,7 +323,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
               nodes={topic.nodes}
               selectedId={selectedId}
               viewMode={viewMode}
-              onSelectNode={setSelectedId}
+              onSelectNode={handleSelectNode}
               onUpdateNodePosition={handleUpdateNodePosition}
             />
           )
@@ -297,6 +337,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
             currentUser={currentUser}
             onVote={handleVote}
             onAddClaim={handleAddClaim}
+            onShareLink={handleShareLink}
           />
         )}
       </div>
