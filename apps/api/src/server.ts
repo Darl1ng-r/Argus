@@ -4,6 +4,7 @@ import cors from 'cors';
 import { testConnection } from './db.js';
 import {
   getTopic,
+  getTopicSubgraph,
   getAllTopics,
   createTopic,
   addClaimNode,
@@ -33,10 +34,7 @@ declare global {
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// -----------------------------------------------------------------------
 // CORS Security Configuration
-// Restricts allowed origin strictly to configured web domain in production
-// -----------------------------------------------------------------------
 const allowedOrigins = [
   process.env.CORS_ORIGIN || 'http://localhost:5173',
   'http://127.0.0.1:5173',
@@ -45,7 +43,6 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, or server-to-server)
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
@@ -58,9 +55,7 @@ app.use(
 
 app.use(express.json({ limit: '100kb' }));
 
-// -----------------------------------------------------------------------
 // Authentication Middleware
-// -----------------------------------------------------------------------
 app.use(async (req: Request, _res: Response, next: NextFunction) => {
   try {
     const rawHeader = req.headers['x-user-id'] || req.headers['authorization'];
@@ -111,12 +106,15 @@ app.get('/api/topics', async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/topics/:id
+// GET /api/topics/:id - Fetch topic with depth-limiting & subgraph pagination support
 app.get('/api/topics/:id', async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
+    const depth = req.query.depth ? parseInt(String(req.query.depth), 10) : 2; // Default to 2-hop subgraph depth
+    const fromNodeId = req.query.fromNodeId ? validateIdentifier(String(req.query.fromNodeId), 'fromNodeId') : undefined;
+
     const currentUserId = req.user?.id;
-    const topic = await getTopic(topicId, currentUserId);
+    const topic = await getTopicSubgraph(topicId, fromNodeId, Math.min(depth, 10), currentUserId);
     if (!topic) return res.status(404).json({ error: 'Topic not found' });
     res.json(topic);
   } catch (err: unknown) {
@@ -128,7 +126,27 @@ app.get('/api/topics/:id', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/topics - Create topic
+// GET /api/topics/:id/subgraph - Lazy load deeper hops on demand
+app.get('/api/topics/:id/subgraph', async (req: Request, res: Response) => {
+  try {
+    const topicId = validateIdentifier(req.params.id, 'topicId');
+    const fromNodeId = validateIdentifier(String(req.query.fromNodeId), 'fromNodeId');
+    const depth = req.query.depth ? parseInt(String(req.query.depth), 10) : 2;
+
+    const currentUserId = req.user?.id;
+    const subgraph = await getTopicSubgraph(topicId, fromNodeId, Math.min(depth, 5), currentUserId);
+    if (!subgraph) return res.status(404).json({ error: 'Topic or node not found' });
+    res.json(subgraph);
+  } catch (err: unknown) {
+    if (err instanceof ValidationError) {
+      return res.status(400).json({ error: err.message });
+    }
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ error: message });
+  }
+});
+
+// POST /api/topics
 app.post('/api/topics', async (req: Request, res: Response) => {
   try {
     const { title, rootClaim } = req.body as { title?: unknown; rootClaim?: unknown };
@@ -147,7 +165,7 @@ app.post('/api/topics', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/topics/:id/nodes - Add claim node with Cycle Detection check
+// POST /api/topics/:id/nodes
 app.post('/api/topics/:id/nodes', async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
@@ -161,7 +179,6 @@ app.post('/api/topics/:id/nodes', async (req: Request, res: Response) => {
     const validatedEdgeType = validateEdgeType(edgeType);
     const sanitizedContent = sanitizeClaimContent(content);
 
-    // Run Cycle Detection check
     const wouldCycle = await detectCycle(topicId, sanitizedParentId);
     if (wouldCycle) {
       throw new ValidationError(
@@ -187,7 +204,7 @@ app.post('/api/topics/:id/nodes', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/topics/:id/cycle-check - Cycle check endpoint for graph editor
+// GET /api/topics/:id/cycle-check
 app.get('/api/topics/:id/cycle-check', async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');

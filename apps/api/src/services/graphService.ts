@@ -14,6 +14,7 @@ export interface ClaimNode {
   userVote?: 'support' | 'contest' | null;
   authorId: string;
   createdAt: string;
+  hasMoreChildren?: boolean; // Indicates if node has un-fetched deeper children
 }
 
 export interface Topic {
@@ -32,9 +33,6 @@ export interface User {
   reputation: number;
 }
 
-// -----------------------------------------------------------------------
-// Ensure user exists in DB
-// -----------------------------------------------------------------------
 export async function getOrCreateUser(userId?: string, username?: string): Promise<User> {
   const id = userId || 'system-user-0000-0000-000000000000';
   const name = username || (id === 'system-user-0000-0000-000000000000' ? 'system' : `User_${id.slice(0, 6)}`);
@@ -75,13 +73,13 @@ function rowToNode(row: Record<string, unknown>, userVoteMap?: Map<string, 'supp
     userVote: userVoteMap ? userVoteMap.get(id) || null : null,
     authorId: (row.author_id as string) || 'system',
     createdAt: (row.created_at as Date).toISOString(),
+    hasMoreChildren: Boolean(row.has_more_children),
   };
 }
 
 // -----------------------------------------------------------------------
 // CYCLE DETECTION ENGINE (Recursive CTE)
-// Checks if connecting node `fromNodeId` -> `toNodeId` would close a loop
-// Argus argument maps are Directed Acyclic Graphs (DAGs)
+// Executed in PostgreSQL's native engine outside Node.js event loop
 // -----------------------------------------------------------------------
 export async function detectCycle(
   topicId: string,
@@ -89,14 +87,13 @@ export async function detectCycle(
   proposedChildId?: string
 ): Promise<boolean> {
   if (proposedChildId && proposedParentId === proposedChildId) {
-    return true; // Self-loop
+    return true;
   }
 
   if (!proposedChildId) {
-    return false; // Adding a brand new node to existing parent cannot create a cycle
+    return false;
   }
 
-  // Check if proposedChildId is an ancestor of proposedParentId
   const result = await db.query<{ would_create_cycle: boolean }>(
     `WITH RECURSIVE ancestors AS (
        SELECT id, parent_id FROM nodes WHERE id = $1 AND topic_id = $3
@@ -116,9 +113,16 @@ export async function detectCycle(
 }
 
 // -----------------------------------------------------------------------
-// getTopic
+// SUBGRAPH DEPTH LIMITING & LAZY LOADING TRAVERSAL
+// Uses a PostgreSQL Recursive CTE to fetch nodes up to `maxDepth` hops.
+// Checks if leaf nodes in the returned subgraph have additional un-fetched children.
 // -----------------------------------------------------------------------
-export async function getTopic(id: string, currentUserId?: string): Promise<Topic | null> {
+export async function getTopicSubgraph(
+  topicId: string,
+  fromNodeId?: string,
+  maxDepth: number = 2,
+  currentUserId?: string
+): Promise<Topic | null> {
   const topicResult = await db.query<{
     id: string;
     title: string;
@@ -127,19 +131,40 @@ export async function getTopic(id: string, currentUserId?: string): Promise<Topi
     created_at: Date;
   }>(
     'SELECT id, title, root_node_id, fork_count, created_at FROM topics WHERE id = $1',
-    [id]
+    [topicId]
   );
 
   if (topicResult.rowCount === 0) return null;
   const t = topicResult.rows[0];
 
+  const startNodeId = fromNodeId || t.root_node_id;
+  if (!startNodeId) throw new ValidationError('Topic has no root node');
+
+  // Recursive CTE fetching subgraph up to maxDepth hops
   const nodesResult = await db.query(
-    `SELECT id, parent_id, author_id, edge_type, pos_x, pos_y, content,
-            support_score, contest_score, is_steel, created_at
-     FROM nodes
-     WHERE topic_id = $1 AND status = 'ACTIVE'
-     ORDER BY pos_y, pos_x`,
-    [id]
+    `WITH RECURSIVE subgraph AS (
+       SELECT id, parent_id, author_id, edge_type, pos_x, pos_y, content,
+              support_score, contest_score, is_steel, created_at, 0 AS depth
+       FROM nodes
+       WHERE id = $1 AND topic_id = $3 AND status = 'ACTIVE'
+
+       UNION ALL
+
+       SELECT n.id, n.parent_id, n.author_id, n.edge_type, n.pos_x, n.pos_y, n.content,
+              n.support_score, n.contest_score, n.is_steel, n.created_at, sg.depth + 1
+       FROM nodes n
+       JOIN subgraph sg ON sg.id = n.parent_id
+       WHERE sg.depth < $2 AND n.topic_id = $3 AND n.status = 'ACTIVE'
+     )
+     SELECT sg.*,
+            EXISTS (
+              SELECT 1 FROM nodes child
+              WHERE child.parent_id = sg.id AND child.topic_id = $3 AND child.status = 'ACTIVE'
+                AND child.id NOT IN (SELECT id FROM subgraph)
+            ) AS has_more_children
+     FROM subgraph sg
+     ORDER BY sg.pos_y, sg.pos_x`,
+    [startNodeId, maxDepth, topicId]
   );
 
   const userVoteMap = new Map<string, 'support' | 'contest'>();
@@ -161,6 +186,11 @@ export async function getTopic(id: string, currentUserId?: string): Promise<Topi
     createdAt: t.created_at.toISOString(),
     nodes: nodesResult.rows.map(row => rowToNode(row, userVoteMap)),
   };
+}
+
+// Full getTopic fallback
+export async function getTopic(id: string, currentUserId?: string): Promise<Topic | null> {
+  return getTopicSubgraph(id, undefined, 10, currentUserId);
 }
 
 // -----------------------------------------------------------------------
@@ -255,7 +285,7 @@ export async function createTopic(title: string, rootClaim: string, authorId: st
 }
 
 // -----------------------------------------------------------------------
-// addClaimNode — with Cycle Check Safeguard
+// addClaimNode
 // -----------------------------------------------------------------------
 export async function addClaimNode(
   topicId: string,

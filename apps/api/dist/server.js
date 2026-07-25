@@ -11,17 +11,13 @@ const graphService_js_1 = require("./services/graphService.js");
 const sanitizer_js_1 = require("./utils/sanitizer.js");
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 4000;
-// -----------------------------------------------------------------------
 // CORS Security Configuration
-// Restricts allowed origin strictly to configured web domain in production
-// -----------------------------------------------------------------------
 const allowedOrigins = [
     process.env.CORS_ORIGIN || 'http://localhost:5173',
     'http://127.0.0.1:5173',
 ];
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {
-        // Allow requests with no origin (like mobile apps, curl, or server-to-server)
         if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         }
@@ -32,9 +28,7 @@ app.use((0, cors_1.default)({
     credentials: true,
 }));
 app.use(express_1.default.json({ limit: '100kb' }));
-// -----------------------------------------------------------------------
 // Authentication Middleware
-// -----------------------------------------------------------------------
 app.use(async (req, _res, next) => {
     try {
         const rawHeader = req.headers['x-user-id'] || req.headers['authorization'];
@@ -82,12 +76,14 @@ app.get('/api/topics', async (_req, res) => {
         res.status(500).json({ error: message });
     }
 });
-// GET /api/topics/:id
+// GET /api/topics/:id - Fetch topic with depth-limiting & subgraph pagination support
 app.get('/api/topics/:id', async (req, res) => {
     try {
         const topicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'topicId');
+        const depth = req.query.depth ? parseInt(String(req.query.depth), 10) : 2; // Default to 2-hop subgraph depth
+        const fromNodeId = req.query.fromNodeId ? (0, sanitizer_js_1.validateIdentifier)(String(req.query.fromNodeId), 'fromNodeId') : undefined;
         const currentUserId = req.user?.id;
-        const topic = await (0, graphService_js_1.getTopic)(topicId, currentUserId);
+        const topic = await (0, graphService_js_1.getTopicSubgraph)(topicId, fromNodeId, Math.min(depth, 10), currentUserId);
         if (!topic)
             return res.status(404).json({ error: 'Topic not found' });
         res.json(topic);
@@ -100,7 +96,27 @@ app.get('/api/topics/:id', async (req, res) => {
         res.status(500).json({ error: message });
     }
 });
-// POST /api/topics - Create topic
+// GET /api/topics/:id/subgraph - Lazy load deeper hops on demand
+app.get('/api/topics/:id/subgraph', async (req, res) => {
+    try {
+        const topicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'topicId');
+        const fromNodeId = (0, sanitizer_js_1.validateIdentifier)(String(req.query.fromNodeId), 'fromNodeId');
+        const depth = req.query.depth ? parseInt(String(req.query.depth), 10) : 2;
+        const currentUserId = req.user?.id;
+        const subgraph = await (0, graphService_js_1.getTopicSubgraph)(topicId, fromNodeId, Math.min(depth, 5), currentUserId);
+        if (!subgraph)
+            return res.status(404).json({ error: 'Topic or node not found' });
+        res.json(subgraph);
+    }
+    catch (err) {
+        if (err instanceof sanitizer_js_1.ValidationError) {
+            return res.status(400).json({ error: err.message });
+        }
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        res.status(500).json({ error: message });
+    }
+});
+// POST /api/topics
 app.post('/api/topics', async (req, res) => {
     try {
         const { title, rootClaim } = req.body;
@@ -118,7 +134,7 @@ app.post('/api/topics', async (req, res) => {
         res.status(500).json({ error: message });
     }
 });
-// POST /api/topics/:id/nodes - Add claim node with Cycle Detection check
+// POST /api/topics/:id/nodes
 app.post('/api/topics/:id/nodes', async (req, res) => {
     try {
         const topicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'topicId');
@@ -126,7 +142,6 @@ app.post('/api/topics/:id/nodes', async (req, res) => {
         const sanitizedParentId = (0, sanitizer_js_1.validateIdentifier)(parentId, 'parentId');
         const validatedEdgeType = (0, sanitizer_js_1.validateEdgeType)(edgeType);
         const sanitizedContent = (0, sanitizer_js_1.sanitizeClaimContent)(content);
-        // Run Cycle Detection check
         const wouldCycle = await (0, graphService_js_1.detectCycle)(topicId, sanitizedParentId);
         if (wouldCycle) {
             throw new sanitizer_js_1.ValidationError('Circular reasoning blocked: connecting these claims creates a cycle. Argus argument graphs must be Directed Acyclic Graphs (DAGs).');
@@ -143,7 +158,7 @@ app.post('/api/topics/:id/nodes', async (req, res) => {
         res.status(500).json({ error: message });
     }
 });
-// GET /api/topics/:id/cycle-check - Cycle check endpoint for graph editor
+// GET /api/topics/:id/cycle-check
 app.get('/api/topics/:id/cycle-check', async (req, res) => {
     try {
         const topicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'topicId');

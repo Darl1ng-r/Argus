@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getOrCreateUser = getOrCreateUser;
 exports.detectCycle = detectCycle;
+exports.getTopicSubgraph = getTopicSubgraph;
 exports.getTopic = getTopic;
 exports.getAllTopics = getAllTopics;
 exports.createTopic = createTopic;
@@ -10,9 +11,6 @@ exports.voteNode = voteNode;
 exports.forkTopic = forkTopic;
 const db_js_1 = require("../db.js");
 const sanitizer_js_1 = require("../utils/sanitizer.js");
-// -----------------------------------------------------------------------
-// Ensure user exists in DB
-// -----------------------------------------------------------------------
 async function getOrCreateUser(userId, username) {
     const id = userId || 'system-user-0000-0000-000000000000';
     const name = username || (id === 'system-user-0000-0000-000000000000' ? 'system' : `User_${id.slice(0, 6)}`);
@@ -42,21 +40,20 @@ function rowToNode(row, userVoteMap) {
         userVote: userVoteMap ? userVoteMap.get(id) || null : null,
         authorId: row.author_id || 'system',
         createdAt: row.created_at.toISOString(),
+        hasMoreChildren: Boolean(row.has_more_children),
     };
 }
 // -----------------------------------------------------------------------
 // CYCLE DETECTION ENGINE (Recursive CTE)
-// Checks if connecting node `fromNodeId` -> `toNodeId` would close a loop
-// Argus argument maps are Directed Acyclic Graphs (DAGs)
+// Executed in PostgreSQL's native engine outside Node.js event loop
 // -----------------------------------------------------------------------
 async function detectCycle(topicId, proposedParentId, proposedChildId) {
     if (proposedChildId && proposedParentId === proposedChildId) {
-        return true; // Self-loop
+        return true;
     }
     if (!proposedChildId) {
-        return false; // Adding a brand new node to existing parent cannot create a cycle
+        return false;
     }
-    // Check if proposedChildId is an ancestor of proposedParentId
     const result = await db_js_1.db.query(`WITH RECURSIVE ancestors AS (
        SELECT id, parent_id FROM nodes WHERE id = $1 AND topic_id = $3
        UNION ALL
@@ -71,18 +68,41 @@ async function detectCycle(topicId, proposedParentId, proposedChildId) {
     return Boolean(result.rows[0]?.would_create_cycle);
 }
 // -----------------------------------------------------------------------
-// getTopic
+// SUBGRAPH DEPTH LIMITING & LAZY LOADING TRAVERSAL
+// Uses a PostgreSQL Recursive CTE to fetch nodes up to `maxDepth` hops.
+// Checks if leaf nodes in the returned subgraph have additional un-fetched children.
 // -----------------------------------------------------------------------
-async function getTopic(id, currentUserId) {
-    const topicResult = await db_js_1.db.query('SELECT id, title, root_node_id, fork_count, created_at FROM topics WHERE id = $1', [id]);
+async function getTopicSubgraph(topicId, fromNodeId, maxDepth = 2, currentUserId) {
+    const topicResult = await db_js_1.db.query('SELECT id, title, root_node_id, fork_count, created_at FROM topics WHERE id = $1', [topicId]);
     if (topicResult.rowCount === 0)
         return null;
     const t = topicResult.rows[0];
-    const nodesResult = await db_js_1.db.query(`SELECT id, parent_id, author_id, edge_type, pos_x, pos_y, content,
-            support_score, contest_score, is_steel, created_at
-     FROM nodes
-     WHERE topic_id = $1 AND status = 'ACTIVE'
-     ORDER BY pos_y, pos_x`, [id]);
+    const startNodeId = fromNodeId || t.root_node_id;
+    if (!startNodeId)
+        throw new sanitizer_js_1.ValidationError('Topic has no root node');
+    // Recursive CTE fetching subgraph up to maxDepth hops
+    const nodesResult = await db_js_1.db.query(`WITH RECURSIVE subgraph AS (
+       SELECT id, parent_id, author_id, edge_type, pos_x, pos_y, content,
+              support_score, contest_score, is_steel, created_at, 0 AS depth
+       FROM nodes
+       WHERE id = $1 AND topic_id = $3 AND status = 'ACTIVE'
+
+       UNION ALL
+
+       SELECT n.id, n.parent_id, n.author_id, n.edge_type, n.pos_x, n.pos_y, n.content,
+              n.support_score, n.contest_score, n.is_steel, n.created_at, sg.depth + 1
+       FROM nodes n
+       JOIN subgraph sg ON sg.id = n.parent_id
+       WHERE sg.depth < $2 AND n.topic_id = $3 AND n.status = 'ACTIVE'
+     )
+     SELECT sg.*,
+            EXISTS (
+              SELECT 1 FROM nodes child
+              WHERE child.parent_id = sg.id AND child.topic_id = $3 AND child.status = 'ACTIVE'
+                AND child.id NOT IN (SELECT id FROM subgraph)
+            ) AS has_more_children
+     FROM subgraph sg
+     ORDER BY sg.pos_y, sg.pos_x`, [startNodeId, maxDepth, topicId]);
     const userVoteMap = new Map();
     if (currentUserId) {
         const votesResult = await db_js_1.db.query('SELECT node_id, vote_type FROM votes WHERE user_id = $1', [currentUserId]);
@@ -98,6 +118,10 @@ async function getTopic(id, currentUserId) {
         createdAt: t.created_at.toISOString(),
         nodes: nodesResult.rows.map(row => rowToNode(row, userVoteMap)),
     };
+}
+// Full getTopic fallback
+async function getTopic(id, currentUserId) {
+    return getTopicSubgraph(id, undefined, 10, currentUserId);
 }
 // -----------------------------------------------------------------------
 // getAllTopics
@@ -165,7 +189,7 @@ async function createTopic(title, rootClaim, authorId) {
     }
 }
 // -----------------------------------------------------------------------
-// addClaimNode — with Cycle Check Safeguard
+// addClaimNode
 // -----------------------------------------------------------------------
 async function addClaimNode(topicId, parentId, authorId, edgeType, content) {
     await getOrCreateUser(authorId);
