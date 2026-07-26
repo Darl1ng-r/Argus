@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.logger = void 0;
+exports.app = exports.logger = void 0;
 require("dotenv/config");
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
@@ -24,12 +24,13 @@ const sanitizer_js_1 = require("./utils/sanitizer.js");
 // Structured Logger (Fix #4b — Pino replaces bare console.log)
 // -----------------------------------------------------------------------
 exports.logger = (0, pino_1.default)({
-    level: process.env.LOG_LEVEL || 'info',
-    ...(process.env.NODE_ENV !== 'production' && {
+    level: process.env.NODE_ENV === 'test' ? 'silent' : process.env.LOG_LEVEL || 'info',
+    ...(process.env.NODE_ENV === 'development' && {
         transport: { target: 'pino-pretty', options: { colorize: true } },
     }),
 });
 const app = (0, express_1.default)();
+exports.app = app;
 const PORT = process.env.PORT || 4000;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 // -----------------------------------------------------------------------
@@ -105,13 +106,13 @@ app.use(express_1.default.json({ limit: '50kb' }));
 // Fix #3 — Distributed Rate Limiting via Redis (graceful fallback to memory)
 // -----------------------------------------------------------------------
 function makeStore() {
-    if (redis_js_1.redisClient) {
+    if (redis_js_1.redisClient && process.env.NODE_ENV !== 'test' && redis_js_1.redisClient.status === 'ready') {
         return new rate_limit_redis_1.RedisStore({
             // @ts-expect-error — ioredis satisfies the interface
             sendCommand: (...args) => redis_js_1.redisClient.call(...args),
         });
     }
-    // Memory store fallback (dev only)
+    // Memory store fallback (dev & offline testing)
     return undefined;
 }
 const globalLimiter = (0, express_rate_limit_1.default)({
@@ -532,7 +533,9 @@ async function bootstrap() {
         }
     });
 }
-bootstrap().catch((err) => {
-    exports.logger.error({ err }, '[ARGUS API] Fatal startup error');
-    process.exit(1);
-});
+if (process.env.NODE_ENV !== 'test') {
+    bootstrap().catch((err) => {
+        exports.logger.error({ err }, '[ARGUS API] Fatal startup error');
+        process.exit(1);
+    });
+}
