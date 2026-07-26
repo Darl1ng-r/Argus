@@ -6,7 +6,10 @@ import { SidePanel } from '../components/SidePanel';
 import { Legend } from '../components/Legend';
 import { Toast, ToastState } from '../components/Toast';
 import { AIAssistantModal, AIAnalysisResult } from '../components/AIAssistantModal';
+import { NodeSearchModal } from '../components/NodeSearchModal';
+import { exportGraphAsPNG, exportGraphAsSVG, exportGraphAsMarkdown } from '../utils/exportUtils';
 import { Topic, ClaimNode, ViewMode, EdgeType, User } from '../types';
+import { Core } from 'cytoscape';
 
 interface TopicSummaryOption {
   id: string;
@@ -30,6 +33,10 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
+
+  // Search & Export & Cytoscape Core states
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [cyInstance, setCyInstance] = useState<Core | null>(null);
 
   // AI Assistant States
   const [isAIModalOpen, setIsAIModalOpen] = useState(false);
@@ -204,6 +211,41 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     }).catch(() => {
       showToast(`Deep link: ${deepLinkUrl}`, 'info');
     });
+  };
+
+  // Keyboard shortcut for Ctrl+F node search modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        setIsSearchOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const handleExport = (format: 'png' | 'svg' | 'markdown') => {
+    if (!topic) return;
+
+    if (format === 'markdown') {
+      exportGraphAsMarkdown(topic);
+      showToast('📝 Markdown outline exported successfully.', 'success');
+      return;
+    }
+
+    if (!cyInstance) {
+      showToast('Canvas graph engine is initializing, please try again.', 'error');
+      return;
+    }
+
+    if (format === 'png') {
+      exportGraphAsPNG(cyInstance, topic.title);
+      showToast('🖼️ High-resolution PNG graph image exported.', 'success');
+    } else if (format === 'svg') {
+      exportGraphAsSVG(cyInstance, topic.title);
+      showToast('📐 Vector graph image exported.', 'success');
+    }
   };
 
   const handleAIAnalyze = async () => {
@@ -412,6 +454,8 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
         onSelectViewMode={handleSelectViewMode}
         onFork={handleFork}
         onAIAnalyze={handleAIAnalyze}
+        onOpenSearch={() => setIsSearchOpen(true)}
+        onExport={handleExport}
         onSwitchUser={onSwitchUser}
       />
 
@@ -539,6 +583,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
               viewMode={viewMode}
               onSelectNode={handleSelectNode}
               onUpdateNodePosition={handleUpdateNodePosition}
+              onCyReady={(cy) => setCyInstance(cy)}
             />
           )
         )}
@@ -564,6 +609,14 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
         loading={aiLoading}
         error={aiError}
         onClose={() => setIsAIModalOpen(false)}
+        onSelectNode={handleSelectNode}
+      />
+
+      {/* Ctrl+F Node Search Modal */}
+      <NodeSearchModal
+        isOpen={isSearchOpen}
+        nodes={topic?.nodes || []}
+        onClose={() => setIsSearchOpen(false)}
         onSelectNode={handleSelectNode}
       />
 

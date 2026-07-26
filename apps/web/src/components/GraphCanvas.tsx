@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import cytoscape, { Core, EventObject } from 'cytoscape';
 import dagre from 'cytoscape-dagre';
 import { ClaimNode, ViewMode } from '../types';
+import { MinimapControl } from './MinimapControl';
 
 // Register dagre layout plugin with cytoscape
 cytoscape.use(dagre);
@@ -12,6 +13,7 @@ interface GraphCanvasProps {
   viewMode: ViewMode;
   onSelectNode: (id: string | null) => void;
   onUpdateNodePosition: (id: string, x: number, y: number) => void;
+  onCyReady?: (cy: Core) => void;
 }
 
 const COLOR_MAP: Record<string, string> = {
@@ -28,6 +30,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
   viewMode,
   onSelectNode,
   onUpdateNodePosition,
+  onCyReady,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
@@ -177,8 +180,30 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     });
 
     cyRef.current = cy;
+    if (onCyReady) onCyReady(cy);
+
+    // Keyboard Shortcuts Listener (+ / - / 0 / Esc)
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't capture when typing in text inputs or textareas
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
+        return;
+      }
+
+      if (e.key === '+' || e.key === '=') {
+        cy.zoom(cy.zoom() * 1.2);
+      } else if (e.key === '-' || e.key === '_') {
+        cy.zoom(cy.zoom() * 0.8);
+      } else if (e.key === '0') {
+        cy.fit(undefined, 50);
+      } else if (e.key === 'Escape') {
+        onSelectNode(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
 
     return () => {
+      window.removeEventListener('keydown', handleKeyDown);
       cy.destroy();
     };
   }, []);
@@ -331,6 +356,13 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
           Auto Layout
         </button>
       </div>
+
+      {/* Radar Minimap Navigation */}
+      <MinimapControl
+        nodes={nodes}
+        selectedId={selectedId}
+        onSelectNode={(id) => onSelectNode(id)}
+      />
     </div>
   );
 };

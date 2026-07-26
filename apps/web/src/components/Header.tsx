@@ -9,6 +9,8 @@ interface HeaderProps {
   onSelectViewMode: (mode: ViewMode) => void;
   onFork: () => void;
   onAIAnalyze?: () => void;
+  onOpenSearch?: () => void;
+  onExport?: (format: 'png' | 'svg' | 'markdown') => void;
   onSwitchUser?: () => void;
 }
 
@@ -20,8 +22,12 @@ export const Header: React.FC<HeaderProps> = ({
   onSelectViewMode,
   onFork,
   onAIAnalyze,
+  onOpenSearch,
+  onExport,
   onSwitchUser
 }) => {
+  const [isExportOpen, setIsExportOpen] = React.useState(false);
+
   return (
     <header>
       <div className="brand">
@@ -55,7 +61,30 @@ export const Header: React.FC<HeaderProps> = ({
         )}
       </div>
       
-      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        {onOpenSearch && (
+          <button
+            onClick={onOpenSearch}
+            title="Search claims (Ctrl+F)"
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: '12px',
+              fontWeight: 600,
+              background: 'var(--marble-panel)',
+              color: 'var(--ink)',
+              border: '1px solid var(--marble-line)',
+              padding: '6px 12px',
+              borderRadius: '20px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}
+          >
+            🔍 Search <span style={{ fontSize: '10px', opacity: 0.7 }}>Ctrl+F</span>
+          </button>
+        )}
+
         {onAIAnalyze && (
           <button
             onClick={onAIAnalyze}
@@ -77,6 +106,76 @@ export const Header: React.FC<HeaderProps> = ({
           >
             ✨ AI Analysis
           </button>
+        )}
+
+        {onExport && (
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => setIsExportOpen(!isExportOpen)}
+              style={{
+                fontFamily: 'Inter, sans-serif',
+                fontSize: '12px',
+                fontWeight: 600,
+                background: 'var(--marble-panel)',
+                color: 'var(--aegean)',
+                border: '1px solid var(--aegean)',
+                padding: '6px 14px',
+                borderRadius: '20px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+            >
+              📥 Export ▾
+            </button>
+
+            {isExportOpen && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '100%',
+                  right: 0,
+                  marginTop: '6px',
+                  background: '#FFFDF8',
+                  border: '1px solid var(--marble-line)',
+                  borderRadius: '8px',
+                  boxShadow: '0 10px 25px rgba(0,0,0,0.15)',
+                  zIndex: 200,
+                  minWidth: '180px',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  onClick={() => {
+                    onExport('png');
+                    setIsExportOpen(false);
+                  }}
+                  style={{ padding: '10px 14px', fontSize: '13px', fontFamily: 'Inter, sans-serif', cursor: 'pointer', borderBottom: '1px solid var(--marble-line)' }}
+                >
+                  🖼️ PNG Image (High-Res)
+                </div>
+                <div
+                  onClick={() => {
+                    onExport('svg');
+                    setIsExportOpen(false);
+                  }}
+                  style={{ padding: '10px 14px', fontSize: '13px', fontFamily: 'Inter, sans-serif', cursor: 'pointer', borderBottom: '1px solid var(--marble-line)' }}
+                >
+                  📐 SVG Vector Image
+                </div>
+                <div
+                  onClick={() => {
+                    onExport('markdown');
+                    setIsExportOpen(false);
+                  }}
+                  style={{ padding: '10px 14px', fontSize: '13px', fontFamily: 'Inter, sans-serif', cursor: 'pointer' }}
+                >
+                  📝 Markdown Outline (.md)
+                </div>
+              </div>
+            )}
+          </div>
         )}
         <nav className="modes">
           <button
