@@ -122,6 +122,33 @@ CREATE INDEX IF NOT EXISTS idx_topic_members_lookup
     ON topic_members(topic_id, user_id, role);
 
 -- ============================================================
+-- ROW-LEVEL SECURITY (RLS) POLICIES
+-- ============================================================
+-- Enable RLS on core tables
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE topics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE nodes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE votes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE topic_members ENABLE ROW LEVEL SECURITY;
+
+-- Permissive public read access for public debate graphs
+CREATE POLICY rls_users_select ON users FOR SELECT USING (true);
+CREATE POLICY rls_topics_select ON topics FOR SELECT USING (true);
+CREATE POLICY rls_nodes_select ON nodes FOR SELECT USING (true);
+CREATE POLICY rls_votes_select ON votes FOR SELECT USING (true);
+CREATE POLICY rls_members_select ON topic_members FOR SELECT USING (true);
+
+-- Restrict topic updates to topic members holding 'owner' role
+CREATE POLICY rls_topics_update ON topics FOR UPDATE
+    USING (
+        EXISTS (
+            SELECT 1 FROM topic_members m
+            WHERE m.topic_id = topics.id
+              AND m.role = 'owner'
+        )
+    );
+
+-- ============================================================
 -- TOPIC 1: Mars vs. Earth
 -- ============================================================
 DO $$

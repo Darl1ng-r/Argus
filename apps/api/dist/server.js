@@ -50,16 +50,28 @@ app.use((0, helmet_1.default)({
             connectSrc: ["'self'"],
             fontSrc: ["'self'"],
             objectSrc: ["'none'"],
+            frameAncestors: ["'none'"],
             upgradeInsecureRequests: IS_PRODUCTION ? [] : null,
         },
     },
+    frameguard: { action: 'deny' },
     hsts: IS_PRODUCTION ? { maxAge: 31_536_000, includeSubDomains: true, preload: true } : false,
 }));
 // -----------------------------------------------------------------------
-// Request Logging (Pino-HTTP)
+// Request Logging (Pino-HTTP) with Sensitive Data Redaction
 // -----------------------------------------------------------------------
 app.use((0, pino_http_1.default)({
     logger: exports.logger,
+    redact: {
+        paths: [
+            'req.headers.authorization',
+            'req.headers.cookie',
+            'req.headers["x-user-id"]',
+            'req.body.password',
+            'req.body.secret',
+        ],
+        censor: '[REDACTED]',
+    },
     customLogLevel(_req, res) {
         if (res.statusCode >= 500)
             return 'error';
