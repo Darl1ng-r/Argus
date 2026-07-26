@@ -1,5 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.hasRequiredRole = hasRequiredRole;
+exports.getUserTopicRole = getUserTopicRole;
 exports.getOrCreateUser = getOrCreateUser;
 exports.detectCycle = detectCycle;
 exports.getTopicSubgraph = getTopicSubgraph;
@@ -9,8 +11,50 @@ exports.createTopic = createTopic;
 exports.addClaimNode = addClaimNode;
 exports.voteNode = voteNode;
 exports.forkTopic = forkTopic;
+exports.updateRootClaim = updateRootClaim;
 const db_js_1 = require("../db.js");
+const redis_js_1 = require("../redis.js");
+const topicEvents_js_1 = require("./topicEvents.js");
 const sanitizer_js_1 = require("../utils/sanitizer.js");
+// -----------------------------------------------------------------------
+// RBAC Role Resolution
+// -----------------------------------------------------------------------
+const ROLE_RANK = {
+    owner: 3,
+    contributor: 2,
+    viewer: 1,
+};
+/**
+ * Checks if a user's role on a topic meets or exceeds the required role rank.
+ */
+function hasRequiredRole(userRole, requiredRole) {
+    if (!userRole)
+        return false;
+    return ROLE_RANK[userRole] >= ROLE_RANK[requiredRole];
+}
+/**
+ * Resolves a user's role for a specific topic.
+ * - Topic author is automatically 'owner'.
+ * - Explicit entry in topic_members table is returned if present.
+ * - Any authenticated user defaults to 'contributor' for public topics.
+ * - Anonymous users are 'viewer'.
+ */
+async function getUserTopicRole(topicId, userId) {
+    if (!userId)
+        return 'viewer';
+    // Check explicit role in topic_members
+    const memberRes = await db_js_1.db.query('SELECT role FROM topic_members WHERE topic_id = $1 AND user_id = $2', [topicId, userId]);
+    if (memberRes.rowCount > 0) {
+        return memberRes.rows[0].role;
+    }
+    // Check if topic author
+    const topicRes = await db_js_1.db.query('SELECT author_id FROM topics WHERE id = $1', [topicId]);
+    if (topicRes.rowCount > 0 && topicRes.rows[0].author_id === userId) {
+        return 'owner';
+    }
+    // Public debate model: authenticated users default to contributor
+    return 'contributor';
+}
 // -----------------------------------------------------------------------
 // Get or Provision User
 // -----------------------------------------------------------------------
@@ -88,6 +132,10 @@ async function detectCycle(topicId, proposedParentId, proposedChildId) {
 // SUBGRAPH DEPTH LIMITING & LAZY LOADING TRAVERSAL
 // -----------------------------------------------------------------------
 async function getTopicSubgraph(topicId, fromNodeId, maxDepth = 2, currentUserId) {
+    const cacheKey = `subgraph:${topicId}:${fromNodeId || 'root'}:${maxDepth}:${currentUserId || 'anon'}`;
+    const cached = await (0, redis_js_1.getCached)(cacheKey);
+    if (cached)
+        return cached;
     const topicResult = await db_js_1.db.query('SELECT id, title, root_node_id, fork_count, created_at FROM topics WHERE id = $1', [topicId]);
     if (topicResult.rowCount === 0)
         return null;
@@ -128,7 +176,7 @@ async function getTopicSubgraph(topicId, fromNodeId, maxDepth = 2, currentUserId
             userVoteMap.set(v.node_id, v.vote_type.toLowerCase());
         }
     }
-    return {
+    const result = {
         id: t.id,
         title: t.title,
         rootNodeId: t.root_node_id,
@@ -136,6 +184,8 @@ async function getTopicSubgraph(topicId, fromNodeId, maxDepth = 2, currentUserId
         createdAt: t.created_at.toISOString(),
         nodes: nodesResult.rows.map((row) => rowToNode(row, userVoteMap)),
     };
+    await (0, redis_js_1.setCached)(cacheKey, result, 30);
+    return result;
 }
 async function getTopic(id, currentUserId) {
     return getTopicSubgraph(id, undefined, 10, currentUserId);
@@ -196,6 +246,8 @@ async function createTopic(title, rootClaim, authorId) {
         const rootNodeId = nodeResult.rows[0].id;
         await client.query(`INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, 'SUPPORT')`, [rootNodeId, user.id]);
         await client.query('UPDATE topics SET root_node_id = $1 WHERE id = $2', [rootNodeId, topicId]);
+        // Record owner role in topic_members
+        await client.query(`INSERT INTO topic_members (topic_id, user_id, role) VALUES ($1, $2, 'owner') ON CONFLICT DO NOTHING`, [topicId, user.id]);
         await client.query('COMMIT');
         return {
             id: topicId,
@@ -249,7 +301,7 @@ async function addClaimNode(topicId, parentId, authorId, edgeType, content) {
         const newNodeId = insertResult.rows[0].id;
         await client.query(`INSERT INTO votes (node_id, user_id, vote_type) VALUES ($1, $2, 'SUPPORT')`, [newNodeId, user.id]);
         await client.query('COMMIT');
-        return {
+        const resultNode = {
             id: newNodeId,
             parent: parentId,
             edgeType,
@@ -263,6 +315,10 @@ async function addClaimNode(topicId, parentId, authorId, edgeType, content) {
             authorId: user.id,
             createdAt: insertResult.rows[0].created_at.toISOString(),
         };
+        // Invalidate cached subgraphs and broadcast real-time SSE event
+        await (0, redis_js_1.invalidateTopicCache)(topicId);
+        (0, topicEvents_js_1.emitTopicMutation)(topicId, 'node_added', resultNode);
+        return resultNode;
     }
     catch (err) {
         await client.query('ROLLBACK');
@@ -322,6 +378,9 @@ async function voteNode(topicId, nodeId, userId, voteType) {
             throw new sanitizer_js_1.ValidationError(`Node not found: ${nodeId}`);
         const node = rowToNode(updated.rows[0]);
         node.userVote = activeUserVote;
+        // Invalidate cached subgraphs and broadcast real-time SSE event
+        await (0, redis_js_1.invalidateTopicCache)(topicId);
+        (0, topicEvents_js_1.emitTopicMutation)(topicId, 'node_voted', node);
         return node;
     }
     catch (err) {
@@ -398,6 +457,8 @@ async function forkTopic(topicId, authorId) {
       )
       WHERE id = $2
     `, [original.rootNodeId, newTopicId]);
+        // Record owner role for the user on their new fork
+        await client.query(`INSERT INTO topic_members (topic_id, user_id, role) VALUES ($1, $2, 'owner') ON CONFLICT DO NOTHING`, [newTopicId, user.id]);
         await client.query('COMMIT');
         // Reload the forked topic from DB to return accurate state
         const forked = await getTopic(newTopicId, user.id);
@@ -412,4 +473,27 @@ async function forkTopic(topicId, authorId) {
     finally {
         client.release();
     }
+}
+/**
+ * Updates the content of a topic's root claim node.
+ * Restricted to topic owners via requireTopicOwner middleware.
+ */
+async function updateRootClaim(topicId, newContent) {
+    const topicRes = await db_js_1.db.query('SELECT root_node_id FROM topics WHERE id = $1', [topicId]);
+    if (topicRes.rowCount === 0 || !topicRes.rows[0].root_node_id) {
+        throw new sanitizer_js_1.ValidationError(`Topic not found or has no root node: ${topicId}`);
+    }
+    const rootNodeId = topicRes.rows[0].root_node_id;
+    const updateRes = await db_js_1.db.query(`UPDATE nodes
+     SET content = $1, version = version + 1
+     WHERE id = $2 AND topic_id = $3
+     RETURNING id, parent_id, author_id, edge_type, pos_x, pos_y, content,
+               support_score, contest_score, is_steel, created_at`, [newContent, rootNodeId, topicId]);
+    if (updateRes.rowCount === 0) {
+        throw new sanitizer_js_1.ValidationError(`Root node not found: ${rootNodeId}`);
+    }
+    const node = rowToNode(updateRes.rows[0]);
+    await (0, redis_js_1.invalidateTopicCache)(topicId);
+    (0, topicEvents_js_1.emitTopicMutation)(topicId, 'root_updated', node);
+    return node;
 }

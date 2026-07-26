@@ -1,4 +1,6 @@
 import { db } from '../db.js';
+import { getCached, setCached, invalidateTopicCache } from '../redis.js';
+import { emitTopicMutation } from './topicEvents.js';
 import { ValidationError } from '../utils/sanitizer.js';
 
 export interface ClaimNode {
@@ -45,6 +47,15 @@ export interface User {
   reputation: number;
 }
 
+export type TopicRole = 'owner' | 'contributor' | 'viewer';
+
+export interface TopicMember {
+  topicId: string;
+  userId: string;
+  role: TopicRole;
+  createdAt: string;
+}
+
 // Fix #9 — paginated response wrapper
 export interface PaginatedTopics {
   topics: TopicSummary[];
@@ -52,6 +63,59 @@ export interface PaginatedTopics {
   page: number;
   limit: number;
   totalPages: number;
+}
+
+// -----------------------------------------------------------------------
+// RBAC Role Resolution
+// -----------------------------------------------------------------------
+
+const ROLE_RANK: Record<TopicRole, number> = {
+  owner: 3,
+  contributor: 2,
+  viewer: 1,
+};
+
+/**
+ * Checks if a user's role on a topic meets or exceeds the required role rank.
+ */
+export function hasRequiredRole(userRole: TopicRole | null, requiredRole: TopicRole): boolean {
+  if (!userRole) return false;
+  return ROLE_RANK[userRole] >= ROLE_RANK[requiredRole];
+}
+
+/**
+ * Resolves a user's role for a specific topic.
+ * - Topic author is automatically 'owner'.
+ * - Explicit entry in topic_members table is returned if present.
+ * - Any authenticated user defaults to 'contributor' for public topics.
+ * - Anonymous users are 'viewer'.
+ */
+export async function getUserTopicRole(
+  topicId: string,
+  userId?: string
+): Promise<TopicRole> {
+  if (!userId) return 'viewer';
+
+  // Check explicit role in topic_members
+  const memberRes = await db.query<{ role: TopicRole }>(
+    'SELECT role FROM topic_members WHERE topic_id = $1 AND user_id = $2',
+    [topicId, userId]
+  );
+  if (memberRes.rowCount! > 0) {
+    return memberRes.rows[0].role;
+  }
+
+  // Check if topic author
+  const topicRes = await db.query<{ author_id: string }>(
+    'SELECT author_id FROM topics WHERE id = $1',
+    [topicId]
+  );
+  if (topicRes.rowCount! > 0 && topicRes.rows[0].author_id === userId) {
+    return 'owner';
+  }
+
+  // Public debate model: authenticated users default to contributor
+  return 'contributor';
 }
 
 // -----------------------------------------------------------------------
@@ -171,6 +235,10 @@ export async function getTopicSubgraph(
   maxDepth: number = 2,
   currentUserId?: string
 ): Promise<Topic | null> {
+  const cacheKey = `subgraph:${topicId}:${fromNodeId || 'root'}:${maxDepth}:${currentUserId || 'anon'}`;
+  const cached = await getCached<Topic>(cacheKey);
+  if (cached) return cached;
+
   const topicResult = await db.query<{
     id: string;
     title: string;
@@ -229,7 +297,7 @@ export async function getTopicSubgraph(
     }
   }
 
-  return {
+  const result: Topic = {
     id: t.id,
     title: t.title,
     rootNodeId: t.root_node_id,
@@ -237,6 +305,9 @@ export async function getTopicSubgraph(
     createdAt: t.created_at.toISOString(),
     nodes: nodesResult.rows.map((row) => rowToNode(row, userVoteMap)),
   };
+
+  await setCached(cacheKey, result, 30);
+  return result;
 }
 
 export async function getTopic(id: string, currentUserId?: string): Promise<Topic | null> {
@@ -329,6 +400,12 @@ export async function createTopic(title: string, rootClaim: string, authorId: st
 
     await client.query('UPDATE topics SET root_node_id = $1 WHERE id = $2', [rootNodeId, topicId]);
 
+    // Record owner role in topic_members
+    await client.query(
+      `INSERT INTO topic_members (topic_id, user_id, role) VALUES ($1, $2, 'owner') ON CONFLICT DO NOTHING`,
+      [topicId, user.id]
+    );
+
     await client.query('COMMIT');
 
     return {
@@ -409,7 +486,7 @@ export async function addClaimNode(
 
     await client.query('COMMIT');
 
-    return {
+    const resultNode: ClaimNode = {
       id: newNodeId,
       parent: parentId,
       edgeType,
@@ -423,6 +500,12 @@ export async function addClaimNode(
       authorId: user.id,
       createdAt: insertResult.rows[0].created_at.toISOString(),
     };
+
+    // Invalidate cached subgraphs and broadcast real-time SSE event
+    await invalidateTopicCache(topicId);
+    emitTopicMutation(topicId, 'node_added', resultNode);
+
+    return resultNode;
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -508,6 +591,11 @@ export async function voteNode(
 
     const node = rowToNode(updated.rows[0] as unknown as Record<string, unknown>);
     node.userVote = activeUserVote;
+
+    // Invalidate cached subgraphs and broadcast real-time SSE event
+    await invalidateTopicCache(topicId);
+    emitTopicMutation(topicId, 'node_voted', node);
+
     return node;
   } catch (err) {
     await client.query('ROLLBACK');
@@ -594,6 +682,12 @@ export async function forkTopic(topicId: string, authorId: string): Promise<Topi
       WHERE id = $2
     `, [original.rootNodeId, newTopicId]);
 
+    // Record owner role for the user on their new fork
+    await client.query(
+      `INSERT INTO topic_members (topic_id, user_id, role) VALUES ($1, $2, 'owner') ON CONFLICT DO NOTHING`,
+      [newTopicId, user.id]
+    );
+
     await client.query('COMMIT');
 
     // Reload the forked topic from DB to return accurate state
@@ -606,4 +700,43 @@ export async function forkTopic(topicId: string, authorId: string): Promise<Topi
   } finally {
     client.release();
   }
+}
+
+/**
+ * Updates the content of a topic's root claim node.
+ * Restricted to topic owners via requireTopicOwner middleware.
+ */
+export async function updateRootClaim(
+  topicId: string,
+  newContent: string
+): Promise<ClaimNode> {
+  const topicRes = await db.query<{ root_node_id: string }>(
+    'SELECT root_node_id FROM topics WHERE id = $1',
+    [topicId]
+  );
+  if (topicRes.rowCount === 0 || !topicRes.rows[0].root_node_id) {
+    throw new ValidationError(`Topic not found or has no root node: ${topicId}`);
+  }
+
+  const rootNodeId = topicRes.rows[0].root_node_id;
+
+  const updateRes = await db.query(
+    `UPDATE nodes
+     SET content = $1, version = version + 1
+     WHERE id = $2 AND topic_id = $3
+     RETURNING id, parent_id, author_id, edge_type, pos_x, pos_y, content,
+               support_score, contest_score, is_steel, created_at`,
+    [newContent, rootNodeId, topicId]
+  );
+
+  if (updateRes.rowCount === 0) {
+    throw new ValidationError(`Root node not found: ${rootNodeId}`);
+  }
+
+  const node = rowToNode(updateRes.rows[0] as unknown as Record<string, unknown>);
+
+  await invalidateTopicCache(topicId);
+  emitTopicMutation(topicId, 'root_updated', node);
+
+  return node;
 }

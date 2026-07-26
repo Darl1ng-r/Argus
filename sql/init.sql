@@ -68,6 +68,15 @@ CREATE TABLE IF NOT EXISTS votes (
     CONSTRAINT uq_votes_user_node UNIQUE (node_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS topic_members (
+    id         TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    topic_id   TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role       VARCHAR(20) NOT NULL CHECK (role IN ('owner', 'contributor', 'viewer')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_topic_members UNIQUE (topic_id, user_id)
+);
+
 -- Basic traversal indexes
 CREATE INDEX IF NOT EXISTS idx_nodes_topic_id  ON nodes(topic_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_parent_id ON nodes(parent_id);
@@ -107,6 +116,10 @@ CREATE INDEX IF NOT EXISTS idx_votes_user_id
 CREATE INDEX IF NOT EXISTS idx_users_clerk_id
     ON users(clerk_id)
     WHERE clerk_id IS NOT NULL;
+
+-- Topic member role lookup
+CREATE INDEX IF NOT EXISTS idx_topic_members_lookup
+    ON topic_members(topic_id, user_id, role);
 
 -- ============================================================
 -- TOPIC 1: Mars vs. Earth

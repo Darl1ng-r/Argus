@@ -94,11 +94,79 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     }
   }, [getAuthHeaders]);
 
+  const [isLive, setIsLive] = useState(false);
+
   useEffect(() => {
     if (topicId) {
       fetchTopic(topicId);
     }
   }, [topicId, fetchTopic]);
+
+  // Real-time Collaboration via Server-Sent Events (SSE)
+  useEffect(() => {
+    if (!topicId) return;
+
+    const eventSource = new EventSource(`/api/topics/${topicId}/events`);
+
+    eventSource.addEventListener('connected', () => {
+      setIsLive(true);
+    });
+
+    eventSource.addEventListener('node_added', (e: MessageEvent) => {
+      try {
+        const newNode: ClaimNode = JSON.parse(e.data);
+        setTopic((prev) => {
+          if (!prev) return null;
+          if (prev.nodes.some((n) => n.id === newNode.id)) return prev;
+          return { ...prev, nodes: [...prev.nodes, newNode] };
+        });
+        showToast(`⚡ Live: New claim added to graph.`, 'info');
+      } catch (err) {
+        console.error('Failed to parse SSE node_added payload', err);
+      }
+    });
+
+    eventSource.addEventListener('node_voted', (e: MessageEvent) => {
+      try {
+        const updatedNode: ClaimNode = JSON.parse(e.data);
+        setTopic((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            nodes: prev.nodes.map((n) => (n.id === updatedNode.id ? { ...n, ...updatedNode, userVote: n.userVote } : n)),
+          };
+        });
+      } catch (err) {
+        console.error('Failed to parse SSE node_voted payload', err);
+      }
+    });
+
+    eventSource.addEventListener('root_updated', (e: MessageEvent) => {
+      try {
+        const updatedRoot: ClaimNode = JSON.parse(e.data);
+        setTopic((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            title: updatedRoot.content,
+            nodes: prev.nodes.map((n) => (n.id === updatedRoot.id ? updatedRoot : n)),
+          };
+        });
+        showToast(`⚡ Live: Topic root claim updated.`, 'info');
+      } catch (err) {
+        console.error('Failed to parse SSE root_updated payload', err);
+      }
+    });
+
+    eventSource.onerror = () => {
+      setIsLive(false);
+    };
+
+    return () => {
+      setIsLive(false);
+      eventSource.close();
+    };
+  }, [topicId]);
 
   const showToast = (message: string, type: 'info' | 'error' | 'success' = 'info') => {
     setToast({ message, type });
@@ -254,6 +322,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
         topicTitle={topic?.title || 'Argument Graph'}
         viewMode={viewMode}
         user={currentUser}
+        isLive={isLive}
         onSelectViewMode={handleSelectViewMode}
         onFork={handleFork}
         onSwitchUser={onSwitchUser}

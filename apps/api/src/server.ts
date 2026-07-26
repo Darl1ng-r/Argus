@@ -9,6 +9,7 @@ import pino from 'pino';
 import { verifyToken } from '@clerk/backend';
 import { testConnection } from './db.js';
 import { redisClient } from './redis.js';
+import { topicEvents, TopicMutationEvent } from './services/topicEvents.js';
 import {
   getTopic,
   getTopicSubgraph,
@@ -19,6 +20,10 @@ import {
   forkTopic,
   getOrCreateUser,
   detectCycle,
+  getUserTopicRole,
+  hasRequiredRole,
+  updateRootClaim,
+  TopicRole,
   User,
 } from './services/graphService.js';
 import {
@@ -224,6 +229,39 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+/**
+ * Higher-order middleware factory that checks if the authenticated user
+ * has the required role (owner, contributor, viewer) for a target topic ID.
+ */
+function requireTopicRole(requiredRole: TopicRole) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+
+    try {
+      const rawTopicId = req.params.id || req.body?.topicId;
+      if (!rawTopicId) {
+        return res.status(400).json({ error: 'Topic ID is required for role verification.' });
+      }
+
+      const topicId = validateIdentifier(rawTopicId, 'topicId');
+      const userRole = await getUserTopicRole(topicId, req.user.id);
+
+      if (!hasRequiredRole(userRole, requiredRole)) {
+        return res.status(403).json({
+          error: `Forbidden: This action requires '${requiredRole}' role on this topic. You have '${userRole}'.`,
+        });
+      }
+
+      next();
+    } catch (err) {
+      if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+      next(err);
+    }
+  };
+}
+
 // -----------------------------------------------------------------------
 // Fix #21 — Generic error sender (prevents leaking internal details)
 // -----------------------------------------------------------------------
@@ -313,6 +351,43 @@ app.get('/api/topics/:id/subgraph', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/topics/:id/events — Server-Sent Events (SSE) stream for real-time updates
+app.get('/api/topics/:id/events', (req: Request, res: Response) => {
+  try {
+    const topicId = validateIdentifier(req.params.id, 'topicId');
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx buffering
+    res.flushHeaders();
+
+    // Initial connected event ping
+    res.write(`event: connected\ndata: ${JSON.stringify({ status: 'live', topicId })}\n\n`);
+
+    // Heartbeat every 20s to keep connection alive
+    const heartbeat = setInterval(() => {
+      res.write(': heartbeat\n\n');
+    }, 20_000);
+
+    const onMutation = (event: TopicMutationEvent) => {
+      res.write(`event: ${event.type}\ndata: ${JSON.stringify(event.payload)}\n\n`);
+    };
+
+    const channel = `topic:${topicId}`;
+    topicEvents.on(channel, onMutation);
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      topicEvents.removeListener(channel, onMutation);
+      res.end();
+    });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+  }
+});
+
 // POST /api/topics — Fix #2: requireAuth applied
 app.post('/api/topics', requireAuth, mutationLimiter, async (req: Request, res: Response) => {
   try {
@@ -328,10 +403,32 @@ app.post('/api/topics', requireAuth, mutationLimiter, async (req: Request, res: 
   }
 });
 
-// POST /api/topics/:id/nodes — Fix #2: requireAuth applied
+// PUT /api/topics/:id/root — Restricted to Topic Owner via RBAC
+app.put(
+  '/api/topics/:id/root',
+  requireAuth,
+  requireTopicRole('owner'),
+  mutationLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const topicId = validateIdentifier(req.params.id, 'topicId');
+      const { content } = req.body as { content?: unknown };
+      const sanitizedContent = sanitizeClaimContent(content);
+
+      const updatedRootNode = await updateRootClaim(topicId, sanitizedContent);
+      res.json(updatedRootNode);
+    } catch (err) {
+      if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+      sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+    }
+  }
+);
+
+// POST /api/topics/:id/nodes — Restricted to Contributor role or higher
 app.post(
   '/api/topics/:id/nodes',
   requireAuth,
+  requireTopicRole('contributor'),
   mutationLimiter,
   async (req: Request, res: Response) => {
     try {
@@ -346,9 +443,6 @@ app.post(
       const validatedEdgeType = validateEdgeType(edgeType);
       const sanitizedContent = sanitizeClaimContent(content);
 
-      // Note: a brand-new leaf node cannot create a cycle since it has no
-      // outgoing edges. Cycle detection here is a safety check for edge
-      // rearrangement, which isn't supported in the current API.
       const wouldCycle = await detectCycle(topicId, sanitizedParentId);
       if (wouldCycle) {
         throw new ValidationError(
@@ -392,10 +486,11 @@ app.get('/api/topics/:id/cycle-check', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/topics/:id/nodes/:nodeId/vote — Fix #2: requireAuth applied
+// POST /api/topics/:id/nodes/:nodeId/vote — Restricted to Contributor role or higher
 app.post(
   '/api/topics/:id/nodes/:nodeId/vote',
   requireAuth,
+  requireTopicRole('contributor'),
   voteLimiter,
   async (req: Request, res: Response) => {
     try {

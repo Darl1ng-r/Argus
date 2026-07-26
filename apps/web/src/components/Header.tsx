@@ -5,6 +5,7 @@ interface HeaderProps {
   topicTitle: string;
   viewMode: ViewMode;
   user: User | null;
+  isLive?: boolean;
   onSelectViewMode: (mode: ViewMode) => void;
   onFork: () => void;
   onSwitchUser?: () => void;
@@ -14,6 +15,7 @@ export const Header: React.FC<HeaderProps> = ({
   topicTitle,
   viewMode,
   user,
+  isLive,
   onSelectViewMode,
   onFork,
   onSwitchUser
@@ -25,8 +27,30 @@ export const Header: React.FC<HeaderProps> = ({
         <span className="tag">Ratio, in the open.</span>
       </div>
       
-      <div className="topic-line">
+      <div className="topic-line" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <b>{topicTitle}</b>
+        {isLive && (
+          <span
+            title="Real-time collaboration live via Server-Sent Events"
+            style={{
+              fontSize: '10px',
+              fontFamily: 'Inter, sans-serif',
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              color: '#6E7B4A',
+              background: '#F0F4E8',
+              border: '1px solid #C4D4A4',
+              padding: '2px 8px',
+              borderRadius: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}
+          >
+            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#6E7B4A', animation: 'pulse 1.5s infinite' }}></span>
+            LIVE
+          </span>
+        )}
       </div>
       
       <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
