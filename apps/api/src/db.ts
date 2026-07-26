@@ -1,7 +1,11 @@
 import 'dotenv/config';
 import { Pool } from 'pg';
 
-// Fix #4 — Properly configured connection pool with timeouts and connection limits
+// Database SSL/TLS Encryption in Transit configuration
+const useSSL =
+  process.env.DB_SSL === 'true' ||
+  (process.env.NODE_ENV === 'production' && process.env.DB_SSL !== 'false');
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: parseInt(process.env.DB_POOL_MAX || '20', 10),
@@ -10,6 +14,11 @@ const pool = new Pool({
   statement_timeout: 15_000,          // Kill any query taking more than 15s
   query_timeout: 15_000,              // Redundant safety net
   application_name: 'argus-api',
+  ssl: useSSL
+    ? {
+        rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false',
+      }
+    : false,
 });
 
 pool.on('error', (err) => {

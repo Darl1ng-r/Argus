@@ -8,7 +8,7 @@ import pinoHttp from 'pino-http';
 import pino from 'pino';
 import { verifyToken } from '@clerk/backend';
 import { testConnection } from './db.js';
-import { redisClient } from './redis.js';
+import { redisClient, getCached, setCached } from './redis.js';
 import { topicEvents, TopicMutationEvent } from './services/topicEvents.js';
 import {
   getTopic,
@@ -60,6 +60,12 @@ declare global {
 const app = express();
 const PORT = process.env.PORT || 4000;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+// -----------------------------------------------------------------------
+// Gateway / Reverse Proxy Readiness (Cloudflare, Nginx, AWS ALB)
+// -----------------------------------------------------------------------
+// Enables Express to trust X-Forwarded-For headers from trusted API Gateways
+app.set('trust proxy', process.env.TRUST_PROXY || 1);
 
 // -----------------------------------------------------------------------
 // Fix #11 — Security Headers via Helmet
@@ -233,6 +239,37 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 }
 
 /**
+ * Idempotency Middleware:
+ * Inspects 'Idempotency-Key' header on mutating endpoints (POST / PUT).
+ * Returns cached mutation response on retried network requests, ensuring zero duplicate operations.
+ */
+async function idempotencyGuard(req: Request, res: Response, next: NextFunction) {
+  const idempotencyKey = req.headers['idempotency-key'];
+  if (typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {
+    return next();
+  }
+
+  const userId = req.user?.id || 'anon';
+  const cacheKey = `idempotency:${userId}:${idempotencyKey.trim()}`;
+
+  const cached = await getCached<{ status: number; body: unknown }>(cacheKey);
+  if (cached) {
+    req.log.info({ idempotencyKey }, '[IDEMPOTENCY] Replayed cached response');
+    return res.status(cached.status).json(cached.body);
+  }
+
+  const originalJson = res.json.bind(res);
+  res.json = (body: unknown) => {
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      setCached(cacheKey, { status: res.statusCode, body }, 600); // 10 min TTL
+    }
+    return originalJson(body);
+  };
+
+  next();
+}
+
+/**
  * Higher-order middleware factory that checks if the authenticated user
  * has the required role (owner, contributor, viewer) for a target topic ID.
  */
@@ -392,7 +429,7 @@ app.get('/api/topics/:id/events', (req: Request, res: Response) => {
 });
 
 // POST /api/topics — Fix #2: requireAuth applied
-app.post('/api/topics', requireAuth, mutationLimiter, async (req: Request, res: Response) => {
+app.post('/api/topics', requireAuth, idempotencyGuard, mutationLimiter, async (req: Request, res: Response) => {
   try {
     const { title, rootClaim } = req.body as { title?: unknown; rootClaim?: unknown };
     const sanitizedTitle = sanitizeTopicTitle(title);
@@ -411,6 +448,7 @@ app.put(
   '/api/topics/:id/root',
   requireAuth,
   requireTopicRole('owner'),
+  idempotencyGuard,
   mutationLimiter,
   async (req: Request, res: Response) => {
     try {
@@ -432,6 +470,7 @@ app.post(
   '/api/topics/:id/nodes',
   requireAuth,
   requireTopicRole('contributor'),
+  idempotencyGuard,
   mutationLimiter,
   async (req: Request, res: Response) => {
     try {

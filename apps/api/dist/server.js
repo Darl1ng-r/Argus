@@ -33,6 +33,11 @@ const app = (0, express_1.default)();
 const PORT = process.env.PORT || 4000;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 // -----------------------------------------------------------------------
+// Gateway / Reverse Proxy Readiness (Cloudflare, Nginx, AWS ALB)
+// -----------------------------------------------------------------------
+// Enables Express to trust X-Forwarded-For headers from trusted API Gateways
+app.set('trust proxy', process.env.TRUST_PROXY || 1);
+// -----------------------------------------------------------------------
 // Fix #11 — Security Headers via Helmet
 // -----------------------------------------------------------------------
 app.use((0, helmet_1.default)({
@@ -187,6 +192,32 @@ function requireAuth(req, res, next) {
     next();
 }
 /**
+ * Idempotency Middleware:
+ * Inspects 'Idempotency-Key' header on mutating endpoints (POST / PUT).
+ * Returns cached mutation response on retried network requests, ensuring zero duplicate operations.
+ */
+async function idempotencyGuard(req, res, next) {
+    const idempotencyKey = req.headers['idempotency-key'];
+    if (typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {
+        return next();
+    }
+    const userId = req.user?.id || 'anon';
+    const cacheKey = `idempotency:${userId}:${idempotencyKey.trim()}`;
+    const cached = await (0, redis_js_1.getCached)(cacheKey);
+    if (cached) {
+        req.log.info({ idempotencyKey }, '[IDEMPOTENCY] Replayed cached response');
+        return res.status(cached.status).json(cached.body);
+    }
+    const originalJson = res.json.bind(res);
+    res.json = (body) => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+            (0, redis_js_1.setCached)(cacheKey, { status: res.statusCode, body }, 600); // 10 min TTL
+        }
+        return originalJson(body);
+    };
+    next();
+}
+/**
  * Higher-order middleware factory that checks if the authenticated user
  * has the required role (owner, contributor, viewer) for a target topic ID.
  */
@@ -334,7 +365,7 @@ app.get('/api/topics/:id/events', (req, res) => {
     }
 });
 // POST /api/topics — Fix #2: requireAuth applied
-app.post('/api/topics', requireAuth, mutationLimiter, async (req, res) => {
+app.post('/api/topics', requireAuth, idempotencyGuard, mutationLimiter, async (req, res) => {
     try {
         const { title, rootClaim } = req.body;
         const sanitizedTitle = (0, sanitizer_js_1.sanitizeTopicTitle)(title);
@@ -349,7 +380,7 @@ app.post('/api/topics', requireAuth, mutationLimiter, async (req, res) => {
     }
 });
 // PUT /api/topics/:id/root — Restricted to Topic Owner via RBAC
-app.put('/api/topics/:id/root', requireAuth, requireTopicRole('owner'), mutationLimiter, async (req, res) => {
+app.put('/api/topics/:id/root', requireAuth, requireTopicRole('owner'), idempotencyGuard, mutationLimiter, async (req, res) => {
     try {
         const topicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'topicId');
         const { content } = req.body;
@@ -364,7 +395,7 @@ app.put('/api/topics/:id/root', requireAuth, requireTopicRole('owner'), mutation
     }
 });
 // POST /api/topics/:id/nodes — Restricted to Contributor role or higher
-app.post('/api/topics/:id/nodes', requireAuth, requireTopicRole('contributor'), mutationLimiter, async (req, res) => {
+app.post('/api/topics/:id/nodes', requireAuth, requireTopicRole('contributor'), idempotencyGuard, mutationLimiter, async (req, res) => {
     try {
         const topicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'topicId');
         const { parentId, edgeType, content } = req.body;
