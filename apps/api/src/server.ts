@@ -42,8 +42,8 @@ import {
 // Structured Logger (Fix #4b — Pino replaces bare console.log)
 // -----------------------------------------------------------------------
 export const logger = pino({
-  level: process.env.LOG_LEVEL || 'info',
-  ...(process.env.NODE_ENV !== 'production' && {
+  level: process.env.NODE_ENV === 'test' ? 'silent' : process.env.LOG_LEVEL || 'info',
+  ...(process.env.NODE_ENV === 'development' && {
     transport: { target: 'pino-pretty', options: { colorize: true } },
   }),
 });
@@ -143,13 +143,13 @@ app.use(express.json({ limit: '50kb' }));
 // Fix #3 — Distributed Rate Limiting via Redis (graceful fallback to memory)
 // -----------------------------------------------------------------------
 function makeStore() {
-  if (redisClient) {
+  if (redisClient && process.env.NODE_ENV !== 'test' && redisClient.status === 'ready') {
     return new RedisStore({
       // @ts-expect-error — ioredis satisfies the interface
       sendCommand: (...args: string[]) => redisClient!.call(...args),
     });
   }
-  // Memory store fallback (dev only)
+  // Memory store fallback (dev & offline testing)
   return undefined;
 }
 
@@ -633,7 +633,11 @@ async function bootstrap() {
   });
 }
 
-bootstrap().catch((err) => {
-  logger.error({ err }, '[ARGUS API] Fatal startup error');
-  process.exit(1);
-});
+export { app };
+
+if (process.env.NODE_ENV !== 'test') {
+  bootstrap().catch((err) => {
+    logger.error({ err }, '[ARGUS API] Fatal startup error');
+    process.exit(1);
+  });
+}
