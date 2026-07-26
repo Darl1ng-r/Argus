@@ -740,3 +740,72 @@ export async function updateRootClaim(
 
   return node;
 }
+
+export interface TopicDiffResult {
+  baseTopic: Topic;
+  compareTopic: Topic;
+  diff: {
+    addedNodes: ClaimNode[];
+    removedNodes: ClaimNode[];
+    sharedNodes: ClaimNode[];
+  };
+}
+
+/**
+ * Functional Graph Diffing Engine:
+ * Compares two topic graphs (base debate vs. fork debate) and categorizes
+ * nodes into added, removed, or shared based on normalized content matching.
+ */
+export async function compareTopicForks(
+  baseTopicId: string,
+  compareTopicId: string,
+  userId?: string
+): Promise<TopicDiffResult> {
+  const [baseTopic, compareTopic] = await Promise.all([
+    getTopic(baseTopicId, userId),
+    getTopic(compareTopicId, userId),
+  ]);
+
+  if (!baseTopic) throw new ValidationError(`Base topic not found: ${baseTopicId}`);
+  if (!compareTopic) throw new ValidationError(`Comparison topic not found: ${compareTopicId}`);
+
+  const normalize = (text: string) => text.trim().toLowerCase();
+
+  const baseContentMap = new Map<string, ClaimNode>();
+  for (const n of baseTopic.nodes) {
+    baseContentMap.set(normalize(n.content), n);
+  }
+
+  const compareContentMap = new Map<string, ClaimNode>();
+  for (const n of compareTopic.nodes) {
+    compareContentMap.set(normalize(n.content), n);
+  }
+
+  const addedNodes: ClaimNode[] = [];
+  const sharedNodes: ClaimNode[] = [];
+
+  for (const n of compareTopic.nodes) {
+    if (baseContentMap.has(normalize(n.content))) {
+      sharedNodes.push(n);
+    } else {
+      addedNodes.push(n);
+    }
+  }
+
+  const removedNodes: ClaimNode[] = [];
+  for (const n of baseTopic.nodes) {
+    if (!compareContentMap.has(normalize(n.content))) {
+      removedNodes.push(n);
+    }
+  }
+
+  return {
+    baseTopic,
+    compareTopic,
+    diff: {
+      addedNodes,
+      removedNodes,
+      sharedNodes,
+    },
+  };
+}

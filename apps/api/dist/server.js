@@ -17,6 +17,8 @@ const db_js_1 = require("./db.js");
 const redis_js_1 = require("./redis.js");
 const topicEvents_js_1 = require("./services/topicEvents.js");
 const graphService_js_1 = require("./services/graphService.js");
+const aiService_js_1 = require("./services/aiService.js");
+const linkPreviewService_js_1 = require("./services/linkPreviewService.js");
 const sanitizer_js_1 = require("./utils/sanitizer.js");
 // -----------------------------------------------------------------------
 // Structured Logger (Fix #4b — Pino replaces bare console.log)
@@ -427,6 +429,51 @@ app.post('/api/topics/:id/fork', requireAuth, mutationLimiter, async (req, res) 
     catch (err) {
         if (err instanceof sanitizer_js_1.ValidationError)
             return res.status(400).json({ error: err.message });
+        sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+    }
+});
+// GET /api/topics/:id/diff/:compareId — Functional Graph Diffing Engine
+app.get('/api/topics/:id/diff/:compareId', async (req, res) => {
+    try {
+        const baseTopicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'baseTopicId');
+        const compareTopicId = (0, sanitizer_js_1.validateIdentifier)(req.params.compareId, 'compareTopicId');
+        const diffResult = await (0, graphService_js_1.compareTopicForks)(baseTopicId, compareTopicId, req.user?.id);
+        res.json(diffResult);
+    }
+    catch (err) {
+        if (err instanceof sanitizer_js_1.ValidationError)
+            return res.status(400).json({ error: err.message });
+        sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+    }
+});
+// POST /api/topics/:id/ai-analyze — Gemini AI Argument Analysis Assistant
+app.post('/api/topics/:id/ai-analyze', async (req, res) => {
+    try {
+        const topicId = (0, sanitizer_js_1.validateIdentifier)(req.params.id, 'topicId');
+        const topic = await (0, graphService_js_1.getTopic)(topicId, req.user?.id);
+        if (!topic)
+            return res.status(404).json({ error: 'Topic not found' });
+        const analysis = await (0, aiService_js_1.analyzeArgumentGraph)(topic);
+        res.json(analysis);
+    }
+    catch (err) {
+        if (err instanceof sanitizer_js_1.ValidationError)
+            return res.status(400).json({ error: err.message });
+        sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+    }
+});
+// GET /api/link-preview — OpenGraph Metadata Extractor
+app.get('/api/link-preview', async (req, res) => {
+    try {
+        const rawUrl = String(req.query.url || '');
+        if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) {
+            return res.status(400).json({ error: 'Valid HTTP/HTTPS URL parameter is required.' });
+        }
+        const previewData = await (0, linkPreviewService_js_1.fetchLinkPreview)(rawUrl);
+        res.set('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800'); // Cache for 24h
+        res.json(previewData);
+    }
+    catch (err) {
         sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
     }
 });

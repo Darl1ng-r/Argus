@@ -23,9 +23,12 @@ import {
   getUserTopicRole,
   hasRequiredRole,
   updateRootClaim,
+  compareTopicForks,
   TopicRole,
   User,
 } from './services/graphService.js';
+import { analyzeArgumentGraph } from './services/aiService.js';
+import { fetchLinkPreview } from './services/linkPreviewService.js';
 import {
   sanitizeClaimContent,
   sanitizeTopicTitle,
@@ -516,6 +519,52 @@ app.post('/api/topics/:id/fork', requireAuth, mutationLimiter, async (req: Reque
     res.status(201).json(forked);
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+  }
+});
+
+// GET /api/topics/:id/diff/:compareId — Functional Graph Diffing Engine
+app.get('/api/topics/:id/diff/:compareId', async (req: Request, res: Response) => {
+  try {
+    const baseTopicId = validateIdentifier(req.params.id, 'baseTopicId');
+    const compareTopicId = validateIdentifier(req.params.compareId, 'compareTopicId');
+
+    const diffResult = await compareTopicForks(baseTopicId, compareTopicId, req.user?.id);
+    res.json(diffResult);
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+  }
+});
+
+// POST /api/topics/:id/ai-analyze — Gemini AI Argument Analysis Assistant
+app.post('/api/topics/:id/ai-analyze', async (req: Request, res: Response) => {
+  try {
+    const topicId = validateIdentifier(req.params.id, 'topicId');
+    const topic = await getTopic(topicId, req.user?.id);
+
+    if (!topic) return res.status(404).json({ error: 'Topic not found' });
+
+    const analysis = await analyzeArgumentGraph(topic);
+    res.json(analysis);
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+  }
+});
+
+// GET /api/link-preview — OpenGraph Metadata Extractor
+app.get('/api/link-preview', async (req: Request, res: Response) => {
+  try {
+    const rawUrl = String(req.query.url || '');
+    if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) {
+      return res.status(400).json({ error: 'Valid HTTP/HTTPS URL parameter is required.' });
+    }
+
+    const previewData = await fetchLinkPreview(rawUrl);
+    res.set('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800'); // Cache for 24h
+    res.json(previewData);
+  } catch (err) {
     sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
   }
 });

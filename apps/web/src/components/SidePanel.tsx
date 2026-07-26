@@ -1,5 +1,12 @@
 import React, { useState } from 'react';
 import { ClaimNode, EdgeType, User } from '../types';
+import { LinkPreviewCard } from './LinkPreviewCard';
+
+// Helper to extract first URL from claim text
+function extractFirstUrl(text: string): string | null {
+  const match = text.match(/https?:\/\/[^\s]+/i);
+  return match ? match[0] : null;
+}
 
 const EDGE_META = {
   root: { label: 'ROOT CLAIM', color: '#B8892B' },
@@ -47,6 +54,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   const contestPct = 100 - supportPct;
 
   const userVote = selectedNode.userVote;
+  const detectedUrl = extractFirstUrl(selectedNode.content);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,6 +99,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
         </div>
 
         <div className="panel-content">{selectedNode.content}</div>
+
+        {detectedUrl && <LinkPreviewCard url={detectedUrl} />}
 
         <div className="score-row">
           <div className="score-label">

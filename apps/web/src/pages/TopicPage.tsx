@@ -5,7 +5,13 @@ import { GraphCanvas } from '../components/GraphCanvas';
 import { SidePanel } from '../components/SidePanel';
 import { Legend } from '../components/Legend';
 import { Toast, ToastState } from '../components/Toast';
+import { AIAssistantModal, AIAnalysisResult } from '../components/AIAssistantModal';
 import { Topic, ClaimNode, ViewMode, EdgeType, User } from '../types';
+
+interface TopicSummaryOption {
+  id: string;
+  title: string;
+}
 
 interface TopicPageProps {
   currentUser: User | null;
@@ -24,6 +30,22 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
+
+  // AI Assistant States
+  const [isAIModalOpen, setIsAIModalOpen] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState<AIAnalysisResult | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
+  // Diff View States
+  const [otherTopics, setOtherTopics] = useState<TopicSummaryOption[]>([]);
+  const [diffCompareId, setDiffCompareId] = useState<string>('');
+  const [diffResult, setDiffResult] = useState<{
+    addedNodes: ClaimNode[];
+    removedNodes: ClaimNode[];
+    sharedNodes: ClaimNode[];
+  } | null>(null);
+  const [isDiffLoading, setIsDiffLoading] = useState(false);
 
   // Initialize ViewMode and SelectedNode from URL Query Parameters on load
   useEffect(() => {
@@ -184,6 +206,70 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     });
   };
 
+  const handleAIAnalyze = async () => {
+    if (!topic) return;
+    setIsAIModalOpen(true);
+    setAiLoading(true);
+    setAiError(null);
+
+    try {
+      const res = await fetch(`/api/topics/${topic.id}/ai-analyze`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+
+      if (res.ok) {
+        const data: AIAnalysisResult = await res.json();
+        setAiAnalysis(data);
+      } else {
+        const errData = await res.json();
+        setAiError(errData.error || 'Failed to analyze topic graph.');
+      }
+    } catch (err: any) {
+      setAiError(err.message || 'Network error while requesting AI analysis.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // Fetch list of topics for Diff comparison dropdown when entering Diff view
+  useEffect(() => {
+    if (viewMode === 'diff' && topicId) {
+      fetch('/api/topics?limit=50')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.topics) {
+            const options = data.topics
+              .filter((t: any) => t.id !== topicId)
+              .map((t: any) => ({ id: t.id, title: t.title }));
+            setOtherTopics(options);
+            if (options.length > 0 && !diffCompareId) {
+              handleFetchDiff(options[0].id);
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, [viewMode, topicId]);
+
+  const handleFetchDiff = async (compareId: string) => {
+    if (!topicId || !compareId) return;
+    setDiffCompareId(compareId);
+    setIsDiffLoading(true);
+
+    try {
+      const res = await fetch(`/api/topics/${topicId}/diff/${compareId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setDiffResult(data.diff);
+      }
+    } catch (err) {
+      console.error('Failed to fetch graph diff', err);
+    } finally {
+      setIsDiffLoading(false);
+    }
+  };
+
   const handleVote = async (nodeId: string, voteType: 'support' | 'contest') => {
     if (!topic || !currentUser) return;
 
@@ -325,6 +411,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
         isLive={isLive}
         onSelectViewMode={handleSelectViewMode}
         onFork={handleFork}
+        onAIAnalyze={handleAIAnalyze}
         onSwitchUser={onSwitchUser}
       />
 
@@ -370,21 +457,79 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
           </div>
         )}
 
-        {/* Graph Canvas */}
+        {/* Functional Graph Diff Engine View */}
         {!isLoading && !errorMsg && viewMode === 'diff' ? (
-          <div className="canvas-area">
-            <div className="diff-empty show">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">
-                <path d="M8 3v18M16 3v18M4 8h4M16 8h4M4 16h4M16 16h4" />
-              </svg>
-              <h3>NO FORKS TO COMPARE, YET</h3>
-              <p>
-                Diff view lines up two people's argument graphs on the same topic, side by side, so you can see exactly where reasoning diverges.
-              </p>
-              <select disabled>
-                <option>Select a fork to compare against…</option>
-              </select>
+          <div className="canvas-area" style={{ display: 'flex', flexDirection: 'column' }}>
+            {/* Diff Controls Header */}
+            <div style={{ padding: '12px 24px', background: 'var(--marble-panel)', borderBottom: '1px solid var(--marble-line)', display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <span style={{ fontFamily: 'Cinzel, serif', fontSize: '12px', letterSpacing: '0.08em', color: 'var(--gold)', fontWeight: 700 }}>
+                COMPARE FORKS:
+              </span>
+              {otherTopics.length > 0 ? (
+                <select
+                  value={diffCompareId}
+                  onChange={(e) => handleFetchDiff(e.target.value)}
+                  style={{
+                    padding: '6px 12px',
+                    fontFamily: 'Inter, sans-serif',
+                    fontSize: '13px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--marble-line)',
+                    background: '#FFFDF8',
+                  }}
+                >
+                  {otherTopics.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.title}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span style={{ fontSize: '13px', fontFamily: 'Inter, sans-serif', color: 'var(--ink-soft)' }}>
+                  No other debate forks found to compare. Create or fork another debate!
+                </span>
+              )}
             </div>
+
+            {/* Diff Summary Overlays */}
+            {diffResult && (
+              <div style={{ flex: 1, padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div style={{ display: 'flex', gap: '16px' }}>
+                  <div style={{ flex: 1, padding: '16px', background: '#F0F4E8', border: '1px solid #C4D4A4', borderRadius: '8px' }}>
+                    <h4 style={{ margin: '0 0 8px', color: '#6E7B4A', fontFamily: 'Cinzel, serif', fontSize: '13px' }}>
+                      🟢 CLAIMS ADDED IN THIS FORK ({diffResult.addedNodes.length})
+                    </h4>
+                    {diffResult.addedNodes.map((n) => (
+                      <div key={n.id} style={{ fontFamily: 'Crimson Pro, serif', fontSize: '14.5px', color: 'var(--ink)', marginBottom: '6px' }}>
+                        • "{n.content}" <span style={{ fontSize: '11px', color: '#6E7B4A' }}>({n.edgeType})</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ flex: 1, padding: '16px', background: '#FDF2F0', border: '1px solid #F2D5CE', borderRadius: '8px' }}>
+                    <h4 style={{ margin: '0 0 8px', color: '#A2472E', fontFamily: 'Cinzel, serif', fontSize: '13px' }}>
+                      🔴 CLAIMS REMOVED / MISSING ({diffResult.removedNodes.length})
+                    </h4>
+                    {diffResult.removedNodes.map((n) => (
+                      <div key={n.id} style={{ fontFamily: 'Crimson Pro, serif', fontSize: '14.5px', color: 'var(--ink)', marginBottom: '6px' }}>
+                        • "{n.content}" <span style={{ fontSize: '11px', color: '#A2472E' }}>({n.edgeType})</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ flex: 1, padding: '16px', background: '#FFFDF8', border: '1px solid var(--marble-line)', borderRadius: '8px' }}>
+                    <h4 style={{ margin: '0 0 8px', color: 'var(--gold)', fontFamily: 'Cinzel, serif', fontSize: '13px' }}>
+                      🟡 SHARED CLAIMS ({diffResult.sharedNodes.length})
+                    </h4>
+                    {diffResult.sharedNodes.map((n) => (
+                      <div key={n.id} style={{ fontFamily: 'Crimson Pro, serif', fontSize: '14.5px', color: 'var(--ink)', marginBottom: '6px' }}>
+                        • "{n.content}"
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           !isLoading && !errorMsg && topic && (
@@ -410,6 +555,17 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
           />
         )}
       </div>
+
+      {/* Gemini AI Assistant Analysis Modal */}
+      <AIAssistantModal
+        isOpen={isAIModalOpen}
+        topicTitle={topic?.title || ''}
+        analysis={aiAnalysis}
+        loading={aiLoading}
+        error={aiError}
+        onClose={() => setIsAIModalOpen(false)}
+        onSelectNode={handleSelectNode}
+      />
 
       <Toast toast={toast} />
     </div>

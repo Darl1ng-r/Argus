@@ -12,6 +12,7 @@ exports.addClaimNode = addClaimNode;
 exports.voteNode = voteNode;
 exports.forkTopic = forkTopic;
 exports.updateRootClaim = updateRootClaim;
+exports.compareTopicForks = compareTopicForks;
 const db_js_1 = require("../db.js");
 const redis_js_1 = require("../redis.js");
 const topicEvents_js_1 = require("./topicEvents.js");
@@ -496,4 +497,53 @@ async function updateRootClaim(topicId, newContent) {
     await (0, redis_js_1.invalidateTopicCache)(topicId);
     (0, topicEvents_js_1.emitTopicMutation)(topicId, 'root_updated', node);
     return node;
+}
+/**
+ * Functional Graph Diffing Engine:
+ * Compares two topic graphs (base debate vs. fork debate) and categorizes
+ * nodes into added, removed, or shared based on normalized content matching.
+ */
+async function compareTopicForks(baseTopicId, compareTopicId, userId) {
+    const [baseTopic, compareTopic] = await Promise.all([
+        getTopic(baseTopicId, userId),
+        getTopic(compareTopicId, userId),
+    ]);
+    if (!baseTopic)
+        throw new sanitizer_js_1.ValidationError(`Base topic not found: ${baseTopicId}`);
+    if (!compareTopic)
+        throw new sanitizer_js_1.ValidationError(`Comparison topic not found: ${compareTopicId}`);
+    const normalize = (text) => text.trim().toLowerCase();
+    const baseContentMap = new Map();
+    for (const n of baseTopic.nodes) {
+        baseContentMap.set(normalize(n.content), n);
+    }
+    const compareContentMap = new Map();
+    for (const n of compareTopic.nodes) {
+        compareContentMap.set(normalize(n.content), n);
+    }
+    const addedNodes = [];
+    const sharedNodes = [];
+    for (const n of compareTopic.nodes) {
+        if (baseContentMap.has(normalize(n.content))) {
+            sharedNodes.push(n);
+        }
+        else {
+            addedNodes.push(n);
+        }
+    }
+    const removedNodes = [];
+    for (const n of baseTopic.nodes) {
+        if (!compareContentMap.has(normalize(n.content))) {
+            removedNodes.push(n);
+        }
+    }
+    return {
+        baseTopic,
+        compareTopic,
+        diff: {
+            addedNodes,
+            removedNodes,
+            sharedNodes,
+        },
+    };
 }

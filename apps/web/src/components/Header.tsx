@@ -8,6 +8,7 @@ interface HeaderProps {
   isLive?: boolean;
   onSelectViewMode: (mode: ViewMode) => void;
   onFork: () => void;
+  onAIAnalyze?: () => void;
   onSwitchUser?: () => void;
 }
 
@@ -18,6 +19,7 @@ export const Header: React.FC<HeaderProps> = ({
   isLive,
   onSelectViewMode,
   onFork,
+  onAIAnalyze,
   onSwitchUser
 }) => {
   return (
@@ -54,6 +56,28 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
       
       <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+        {onAIAnalyze && (
+          <button
+            onClick={onAIAnalyze}
+            title="Analyze logical structure & fallacies using Gemini AI"
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: '12px',
+              fontWeight: 600,
+              background: 'var(--marble-panel)',
+              color: 'var(--gold)',
+              border: '1px solid var(--gold)',
+              padding: '6px 14px',
+              borderRadius: '20px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            ✨ AI Analysis
+          </button>
+        )}
         <nav className="modes">
           <button
             className={viewMode === 'graph' ? 'active' : ''}
