@@ -126,7 +126,13 @@ export async function getOrCreateUser(
   username?: string,
   email?: string
 ): Promise<User> {
-  const inputId = userIdOrClerkId || 'system-user-0000-0000-000000000000';
+  // SECURITY FIX: Never fall back to the privileged system user for real callers.
+  // Callers must pass a valid non-empty identifier; otherwise throw immediately.
+  if (!userIdOrClerkId || !userIdOrClerkId.trim()) {
+    throw new ValidationError('Cannot resolve user: no valid user ID provided.');
+  }
+
+  const inputId = userIdOrClerkId.trim();
   const isClerkId = inputId.startsWith('user_');
 
   const existing = await db.query<User>(
@@ -235,79 +241,97 @@ export async function getTopicSubgraph(
   maxDepth: number = 2,
   currentUserId?: string
 ): Promise<Topic | null> {
-  const cacheKey = `subgraph:${topicId}:${fromNodeId || 'root'}:${maxDepth}:${currentUserId || 'anon'}`;
-  const cached = await getCached<Topic>(cacheKey);
-  if (cached) return cached;
+  // PERF FIX: Cache the base graph WITHOUT userId so all users share one cache entry.
+  // User-specific vote data is loaded separately and merged in memory.
+  const baseCacheKey = `subgraph:${topicId}:${fromNodeId || 'root'}:${maxDepth}:base`;
+  let baseGraph = await getCached<Topic>(baseCacheKey);
 
-  const topicResult = await db.query<{
-    id: string;
-    title: string;
-    root_node_id: string;
-    fork_count: number;
-    created_at: Date;
-  }>(
-    'SELECT id, title, root_node_id, fork_count, created_at FROM topics WHERE id = $1',
-    [topicId]
-  );
-
-  if (topicResult.rowCount === 0) return null;
-  const t = topicResult.rows[0];
-
-  const startNodeId = fromNodeId || t.root_node_id;
-  if (!startNodeId) throw new ValidationError('Topic has no root node');
-
-  const nodesResult = await db.query(
-    `WITH RECURSIVE subgraph AS (
-       SELECT id, parent_id, author_id, edge_type, pos_x, pos_y, content,
-              support_score, contest_score, is_steel, created_at, 0 AS depth
-       FROM nodes
-       WHERE id = $1 AND topic_id = $3 AND status = 'ACTIVE'
-
-       UNION ALL
-
-       SELECT n.id, n.parent_id, n.author_id, n.edge_type, n.pos_x, n.pos_y, n.content,
-              n.support_score, n.contest_score, n.is_steel, n.created_at, sg.depth + 1
-       FROM nodes n
-       JOIN subgraph sg ON sg.id = n.parent_id
-       WHERE sg.depth < $2 AND n.topic_id = $3 AND n.status = 'ACTIVE'
-     )
-     SELECT sg.*,
-            EXISTS (
-              SELECT 1 FROM nodes child
-              WHERE child.parent_id = sg.id AND child.topic_id = $3 AND child.status = 'ACTIVE'
-                AND child.id NOT IN (SELECT id FROM subgraph)
-            ) AS has_more_children
-     FROM subgraph sg
-     ORDER BY sg.pos_y, sg.pos_x`,
-    [startNodeId, maxDepth, topicId]
-  );
-
-  // Fix #10 — scope vote query to current topic's nodes only (not all user votes)
-  const userVoteMap = new Map<string, 'support' | 'contest'>();
-  if (currentUserId) {
-    const votesResult = await db.query<{ node_id: string; vote_type: string }>(
-      `SELECT v.node_id, v.vote_type
-       FROM votes v
-       JOIN nodes n ON n.id = v.node_id
-       WHERE v.user_id = $1 AND n.topic_id = $2`,
-      [currentUserId, topicId]
+  if (!baseGraph) {
+    const topicResult = await db.query<{
+      id: string;
+      title: string;
+      root_node_id: string;
+      fork_count: number;
+      created_at: Date;
+    }>(
+      'SELECT id, title, root_node_id, fork_count, created_at FROM topics WHERE id = $1',
+      [topicId]
     );
-    for (const v of votesResult.rows) {
-      userVoteMap.set(v.node_id, v.vote_type.toLowerCase() as 'support' | 'contest');
-    }
+
+    if (topicResult.rowCount === 0) return null;
+    const t = topicResult.rows[0];
+
+    const startNodeId = fromNodeId || t.root_node_id;
+    if (!startNodeId) throw new ValidationError('Topic has no root node');
+
+    // PERF FIX: Added LIMIT 500 to prevent OOM on massive graphs.
+    // hasMoreChildren flag already signals the client to lazy-load further.
+    const nodesResult = await db.query(
+      `WITH RECURSIVE subgraph AS (
+         SELECT id, parent_id, author_id, edge_type, pos_x, pos_y, content,
+                support_score, contest_score, is_steel, created_at, 0 AS depth
+         FROM nodes
+         WHERE id = $1 AND topic_id = $3 AND status = 'ACTIVE'
+
+         UNION ALL
+
+         SELECT n.id, n.parent_id, n.author_id, n.edge_type, n.pos_x, n.pos_y, n.content,
+                n.support_score, n.contest_score, n.is_steel, n.created_at, sg.depth + 1
+         FROM nodes n
+         JOIN subgraph sg ON sg.id = n.parent_id
+         WHERE sg.depth < $2 AND n.topic_id = $3 AND n.status = 'ACTIVE'
+       )
+       SELECT sg.*,
+              EXISTS (
+                SELECT 1 FROM nodes child
+                WHERE child.parent_id = sg.id AND child.topic_id = $3 AND child.status = 'ACTIVE'
+                  AND child.id NOT IN (SELECT id FROM subgraph)
+              ) AS has_more_children
+       FROM subgraph sg
+       ORDER BY sg.pos_y, sg.pos_x
+       LIMIT 500`,
+      [startNodeId, maxDepth, topicId]
+    );
+
+    baseGraph = {
+      id: t.id,
+      title: t.title,
+      rootNodeId: t.root_node_id,
+      forkCount: t.fork_count,
+      createdAt: t.created_at.toISOString(),
+      // Base graph has no userVote data (null for all nodes)
+      nodes: nodesResult.rows.map((row) => rowToNode(row, undefined)),
+    };
+
+    await setCached(baseCacheKey, baseGraph, 30);
   }
 
-  const result: Topic = {
-    id: t.id,
-    title: t.title,
-    rootNodeId: t.root_node_id,
-    forkCount: t.fork_count,
-    createdAt: t.created_at.toISOString(),
-    nodes: nodesResult.rows.map((row) => rowToNode(row, userVoteMap)),
-  };
+  // If no user, return the shared base graph directly (no vote overlay needed)
+  if (!currentUserId) {
+    return baseGraph;
+  }
 
-  await setCached(cacheKey, result, 30);
-  return result;
+  // Lightweight per-user vote overlay — only fetches vote rows, not the full graph
+  const userVoteMap = new Map<string, 'support' | 'contest'>();
+  const votesResult = await db.query<{ node_id: string; vote_type: string }>(
+    `SELECT v.node_id, v.vote_type
+     FROM votes v
+     JOIN nodes n ON n.id = v.node_id
+     WHERE v.user_id = $1 AND n.topic_id = $2`,
+    [currentUserId, topicId]
+  );
+  for (const v of votesResult.rows) {
+    userVoteMap.set(v.node_id, v.vote_type.toLowerCase() as 'support' | 'contest');
+  }
+
+  // Merge votes into a shallow copy — do NOT mutate the cached base graph
+  return {
+    ...baseGraph,
+    nodes: baseGraph.nodes.map((n) => ({
+      ...n,
+      userVote: userVoteMap.get(n.id) || null,
+    })),
+  };
 }
 
 export async function getTopic(id: string, currentUserId?: string): Promise<Topic | null> {

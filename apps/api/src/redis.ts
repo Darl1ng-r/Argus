@@ -54,11 +54,40 @@ export async function invalidateTopicCache(topicId: string): Promise<void> {
   if (!redisClient) return;
   try {
     const pattern = `subgraph:${topicId}:*`;
-    const keys = await redisClient.keys(pattern);
-    if (keys.length > 0) {
-      await redisClient.del(...keys);
-    }
+    let cursor = '0';
+    do {
+      const [nextCursor, keys] = await redisClient.scan(cursor, 'MATCH', pattern, 'COUNT', '100');
+      cursor = nextCursor;
+      if (keys.length > 0) {
+        await redisClient.del(...keys);
+      }
+    } while (cursor !== '0');
   } catch (err) {
     // Ignore cache invalidation errors
   }
+}
+
+/**
+ * Publishes a message to a Redis channel for SSE fan-out.
+ */
+export async function publishEvent(channel: string, message: unknown): Promise<void> {
+  if (!redisClient) return;
+  try {
+    await redisClient.publish(channel, JSON.stringify(message));
+  } catch (err) {
+    // Ignore publish errors
+  }
+}
+
+/**
+ * Subscribes to a Redis channel. Returns a new client instance for the subscriber.
+ */
+export async function subscribeToEvent(channel: string, onMessage: (message: string) => void): Promise<Redis | null> {
+  if (!process.env.REDIS_URL) return null;
+  const subscriber = new Redis(process.env.REDIS_URL);
+  await subscriber.subscribe(channel);
+  subscriber.on('message', (ch, msg) => {
+    if (ch === channel) onMessage(msg);
+  });
+  return subscriber;
 }

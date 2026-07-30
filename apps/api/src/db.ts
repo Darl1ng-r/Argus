@@ -22,7 +22,8 @@ const pool = new Pool({
 });
 
 pool.on('error', (err) => {
-  console.error('[DB] Unexpected idle client error', err);
+  // Import logger lazily to avoid circular dep — db.ts is imported by server.ts before logger is assigned
+  process.stderr.write(`[DB] Unexpected idle client error: ${err.message}\n`);
 });
 
 pool.on('connect', () => {
@@ -35,7 +36,7 @@ export async function testConnection(): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query('SELECT 1');
-    console.log('[DB] Connected to PostgreSQL ✓');
+    process.stdout.write('[DB] Connected to PostgreSQL ✓\n');
   } finally {
     client.release();
   }
