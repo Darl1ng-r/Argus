@@ -25,6 +25,7 @@ export interface TopicSummary {
   title: string;
   rootNodeId: string;
   forkCount: number;
+  forkedFromId?: string | null;
   createdAt: string;
   claimCount: number;
   rootClaimContent: string | null;
@@ -35,8 +36,30 @@ export interface Topic {
   title: string;
   rootNodeId: string;
   forkCount: number;
+  forkedFromId?: string | null;
   createdAt: string;
   nodes: ClaimNode[];
+}
+
+export interface NodeVersion {
+  id: string;
+  nodeId: string;
+  content: string;
+  version: number;
+  editedBy: string;
+  createdAt: string;
+}
+
+export interface SearchResults {
+  topics: TopicSummary[];
+  claims: {
+    id: string;
+    topicId: string;
+    topicTitle: string;
+    content: string;
+    edgeType: string;
+    createdAt: string;
+  }[];
 }
 
 export interface User {
@@ -708,12 +731,12 @@ export async function forkTopic(topicId: string, authorId: string): Promise<Topi
     // Increment fork counter on the original
     await client.query('UPDATE topics SET fork_count = fork_count + 1 WHERE id = $1', [topicId]);
 
-    // Create the new forked topic
+    // Create the new forked topic (Item 14: track fork lineage)
     const topicResult = await client.query<{ id: string; created_at: Date }>(
-      `INSERT INTO topics (title, author_id)
-       VALUES ($1, $2)
+      `INSERT INTO topics (title, author_id, forked_from_id)
+       VALUES ($1, $2, $3)
        RETURNING id, created_at`,
-      [`${original.title} (Fork)`, user.id]
+      [`${original.title} (Fork)`, user.id, topicId]
     );
     const newTopicId = topicResult.rows[0].id;
     const newTopicCreatedAt = topicResult.rows[0].created_at;
@@ -793,11 +816,12 @@ export async function forkTopic(topicId: string, authorId: string): Promise<Topi
 
 /**
  * Updates the content of a topic's root claim node.
- * Restricted to topic owners via requireTopicOwner middleware.
+ * Stores previous version into immutable node_versions table (Item 13).
  */
 export async function updateRootClaim(
   topicId: string,
-  newContent: string
+  newContent: string,
+  editedByUserId?: string
 ): Promise<ClaimNode> {
   const topicRes = await db.query<{ root_node_id: string }>(
     'SELECT root_node_id FROM topics WHERE id = $1',
@@ -809,25 +833,169 @@ export async function updateRootClaim(
 
   const rootNodeId = topicRes.rows[0].root_node_id;
 
-  const updateRes = await db.query(
-    `UPDATE nodes
-     SET content = $1, version = version + 1
-     WHERE id = $2 AND topic_id = $3
-     RETURNING id, parent_id, author_id, edge_type, pos_x, pos_y, content,
-               support_score, contest_score, is_steel, created_at`,
-    [newContent, rootNodeId, topicId]
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Fetch existing node state for version history snapshot
+    const existingNode = await client.query<{ content: string; version: number; author_id: string }>(
+      'SELECT content, version, author_id FROM nodes WHERE id = $1 AND topic_id = $2',
+      [rootNodeId, topicId]
+    );
+
+    if (existingNode.rowCount === 0) {
+      throw new ValidationError(`Root node not found: ${rootNodeId}`);
+    }
+
+    const { content: oldContent, version: oldVersion, author_id: authorId } = existingNode.rows[0];
+    const editor = editedByUserId || authorId;
+
+    // Snapshot current version into immutable node_versions table (Item 13)
+    await client.query(
+      `INSERT INTO node_versions (node_id, content, version, edited_by)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (node_id, version) DO NOTHING`,
+      [rootNodeId, oldContent, oldVersion, editor]
+    );
+
+    const updateRes = await client.query(
+      `UPDATE nodes
+       SET content = $1, version = version + 1
+       WHERE id = $2 AND topic_id = $3
+       RETURNING id, parent_id, author_id, edge_type, pos_x, pos_y, content,
+                 support_score, contest_score, is_steel, created_at`,
+      [newContent, rootNodeId, topicId]
+    );
+
+    await client.query('COMMIT');
+
+    const node = rowToNode(updateRes.rows[0] as unknown as Record<string, unknown>);
+
+    await invalidateTopicCache(topicId);
+    emitTopicMutation(topicId, 'root_updated', node);
+
+    return node;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Returns immutable edit history for a specific node (Item 13).
+ */
+export async function getNodeVersionHistory(nodeId: string): Promise<NodeVersion[]> {
+  const res = await db.query<{
+    id: string;
+    node_id: string;
+    content: string;
+    version: number;
+    edited_by: string;
+    created_at: Date;
+  }>(
+    `SELECT id, node_id, content, version, edited_by, created_at
+     FROM node_versions
+     WHERE node_id = $1
+     ORDER BY version DESC`,
+    [nodeId]
   );
 
-  if (updateRes.rowCount === 0) {
-    throw new ValidationError(`Root node not found: ${rootNodeId}`);
+  return res.rows.map((r) => ({
+    id: r.id,
+    nodeId: r.node_id,
+    content: r.content,
+    version: r.version,
+    editedBy: r.edited_by,
+    createdAt: r.created_at.toISOString(),
+  }));
+}
+
+/**
+ * Full-text search across topics and nodes using PostgreSQL GIN TSVECTOR indexes (Item 15).
+ */
+export async function searchDebatesAndClaims(query: string, limit = 20): Promise<SearchResults> {
+  const cleanQuery = query.trim();
+  if (!cleanQuery) {
+    return { topics: [], claims: [] };
   }
 
-  const node = rowToNode(updateRes.rows[0] as unknown as Record<string, unknown>);
+  const [topicsRes, nodesRes] = await Promise.all([
+    db.query<{
+      id: string;
+      title: string;
+      root_node_id: string;
+      fork_count: number;
+      created_at: Date;
+      claim_count: string;
+      root_claim_content: string | null;
+      forked_from_id: string | null;
+    }>(
+      `SELECT
+         t.id,
+         t.title,
+         t.root_node_id,
+         t.fork_count,
+         t.created_at,
+         t.forked_from_id,
+         COUNT(n.id) AS claim_count,
+         root_node.content AS root_claim_content
+       FROM topics t
+       LEFT JOIN nodes n ON n.topic_id = t.id AND n.status = 'ACTIVE'
+       LEFT JOIN nodes root_node ON root_node.id = t.root_node_id
+       WHERE t.title_tsv @@ plainto_tsquery('english', $1)
+          OR t.title ILIKE '%' || $1 || '%'
+       GROUP BY t.id, root_node.content
+       ORDER BY ts_rank_cd(t.title_tsv, plainto_tsquery('english', $1)) DESC, t.created_at DESC
+       LIMIT $2`,
+      [cleanQuery, limit]
+    ),
+    db.query<{
+      id: string;
+      topic_id: string;
+      topic_title: string;
+      content: string;
+      edge_type: string;
+      created_at: Date;
+    }>(
+      `SELECT
+         n.id,
+         n.topic_id,
+         t.title AS topic_title,
+         n.content,
+         n.edge_type,
+         n.created_at
+       FROM nodes n
+       JOIN topics t ON t.id = n.topic_id
+       WHERE (n.content_tsv @@ plainto_tsquery('english', $1) OR n.content ILIKE '%' || $1 || '%')
+         AND n.status = 'ACTIVE'
+       ORDER BY ts_rank_cd(n.content_tsv, plainto_tsquery('english', $1)) DESC, n.created_at DESC
+       LIMIT $2`,
+      [cleanQuery, limit]
+    ),
+  ]);
 
-  await invalidateTopicCache(topicId);
-  emitTopicMutation(topicId, 'root_updated', node);
-
-  return node;
+  return {
+    topics: topicsRes.rows.map((t) => ({
+      id: t.id,
+      title: t.title,
+      rootNodeId: t.root_node_id,
+      forkCount: t.fork_count,
+      createdAt: t.created_at.toISOString(),
+      claimCount: parseInt(t.claim_count, 10),
+      rootClaimContent: t.root_claim_content,
+      forkedFromId: t.forked_from_id,
+    })),
+    claims: nodesRes.rows.map((n) => ({
+      id: n.id,
+      topicId: n.topic_id,
+      topicTitle: n.topic_title,
+      content: n.content,
+      edgeType: n.edge_type,
+      createdAt: n.created_at.toISOString(),
+    })),
+  };
 }
 
 export interface TopicDiffResult {

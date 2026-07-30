@@ -89,4 +89,19 @@ router.post(
   }
 );
 
+// ---------------------------------------------------------------------------
+// GET /api/topics/:id/nodes/:nodeId/history — immutable edit history (Item 13)
+// ---------------------------------------------------------------------------
+router.get('/:nodeId/history', async (req: Request, res: Response) => {
+  try {
+    const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
+    const { getNodeVersionHistory } = await import('../services/graphService.js');
+    const history = await getNodeVersionHistory(nodeId);
+    res.json(history);
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+  }
+});
+
 export default router;

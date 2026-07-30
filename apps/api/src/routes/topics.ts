@@ -15,6 +15,7 @@ import {
   TopicRole,
 } from '../services/graphService.js';
 import { analyzeArgumentGraph } from '../services/aiService.js';
+import { enqueueAIAnalysis, getAIJobStatus } from '../services/aiQueueService.js';
 import {
   sanitizeClaimContent,
   sanitizeTopicTitle,
@@ -189,7 +190,7 @@ router.get('/:id/diff/:compareId', async (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/topics/:id/ai-analyze — Gemini AI argument analysis
+// POST /api/topics/:id/ai-analyze — BullMQ async AI argument analysis queue
 // ---------------------------------------------------------------------------
 router.post('/:id/ai-analyze', async (req: Request, res: Response) => {
   try {
@@ -198,8 +199,30 @@ router.post('/:id/ai-analyze', async (req: Request, res: Response) => {
 
     if (!topic) return res.status(404).json({ error: 'Topic not found' });
 
-    const analysis = await analyzeArgumentGraph(topic);
-    res.json(analysis);
+    const jobInfo = await enqueueAIAnalysis(topicId, req.user?.id);
+    if (jobInfo.status === 'queued') {
+      return res.status(202).json({
+        jobId: jobInfo.jobId,
+        status: 'queued',
+        message: 'AI analysis queued in background worker.',
+      });
+    }
+
+    res.json(jobInfo.result);
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/topics/:id/ai-analyze/status/:jobId — Check async AI analysis status
+// ---------------------------------------------------------------------------
+router.get('/:id/ai-analyze/status/:jobId', async (req: Request, res: Response) => {
+  try {
+    const jobId = validateIdentifier(req.params.jobId, 'jobId');
+    const status = await getAIJobStatus(jobId);
+    res.json(status);
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);

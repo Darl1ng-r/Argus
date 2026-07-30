@@ -31,4 +31,23 @@ router.get('/link-preview', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/search — Full-text search across debates and claims (Item 15)
+router.get('/search', async (req: Request, res: Response) => {
+  try {
+    const q = String(req.query.q || req.query.query || '').trim();
+    if (!q) {
+      return res.status(400).json({ error: 'Search query parameter "q" is required.' });
+    }
+
+    const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit || '20'), 10)));
+    const { searchDebatesAndClaims } = await import('../services/graphService.js');
+    const results = await searchDebatesAndClaims(q, limit);
+
+    res.set('Cache-Control', 'public, max-age=10, stale-while-revalidate=30');
+    res.json(results);
+  } catch (err) {
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+  }
+});
+
 export default router;

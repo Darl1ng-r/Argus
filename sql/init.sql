@@ -16,12 +16,13 @@ VALUES ('system-user-0000-0000-000000000000', 'system', 'system@argus.local')
 ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS topics (
-    id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    title        VARCHAR(500) NOT NULL,
-    root_node_id TEXT,
-    author_id    TEXT NOT NULL REFERENCES users(id),
-    fork_count   INT NOT NULL DEFAULT 0,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id             TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    title          VARCHAR(500) NOT NULL,
+    root_node_id   TEXT,
+    author_id      TEXT NOT NULL REFERENCES users(id),
+    forked_from_id TEXT REFERENCES topics(id) ON DELETE SET NULL,
+    fork_count     INT NOT NULL DEFAULT 0,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS nodes (
@@ -77,13 +78,32 @@ CREATE TABLE IF NOT EXISTS topic_members (
     CONSTRAINT uq_topic_members UNIQUE (topic_id, user_id)
 );
 
--- Basic traversal indexes
-CREATE INDEX IF NOT EXISTS idx_nodes_topic_id  ON nodes(topic_id);
-CREATE INDEX IF NOT EXISTS idx_nodes_parent_id ON nodes(parent_id);
-CREATE INDEX IF NOT EXISTS idx_edges_from_node ON edges(from_node_id);
-CREATE INDEX IF NOT EXISTS idx_edges_to_node   ON edges(to_node_id);
-CREATE INDEX IF NOT EXISTS idx_edges_topic     ON edges(topic_id);
-CREATE INDEX IF NOT EXISTS idx_votes_node_id   ON votes(node_id);
+CREATE TABLE IF NOT EXISTS node_versions (
+    id         TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    node_id    TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    content    TEXT NOT NULL,
+    version    INT NOT NULL,
+    edited_by  TEXT NOT NULL REFERENCES users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_node_versions_ver UNIQUE (node_id, version)
+);
+
+-- Basic traversal & search indexes
+CREATE INDEX IF NOT EXISTS idx_nodes_topic_id       ON nodes(topic_id);
+CREATE INDEX IF NOT EXISTS idx_nodes_parent_id      ON nodes(parent_id);
+CREATE INDEX IF NOT EXISTS idx_topics_forked_from   ON topics(forked_from_id);
+CREATE INDEX IF NOT EXISTS idx_node_versions_node   ON node_versions(node_id, version DESC);
+CREATE INDEX IF NOT EXISTS idx_edges_from_node      ON edges(from_node_id);
+CREATE INDEX IF NOT EXISTS idx_edges_to_node        ON edges(to_node_id);
+CREATE INDEX IF NOT EXISTS idx_edges_topic          ON edges(topic_id);
+CREATE INDEX IF NOT EXISTS idx_votes_node_id        ON votes(node_id);
+
+-- Full-text search indexes (GIN on tsvector)
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+CREATE INDEX IF NOT EXISTS idx_nodes_content_tsv ON nodes USING gin(content_tsv);
+
+ALTER TABLE topics ADD COLUMN IF NOT EXISTS title_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', title)) STORED;
+CREATE INDEX IF NOT EXISTS idx_topics_title_tsv ON topics USING gin(title_tsv);
 
 -- Fix #14 — Composite & partial indexes for production query patterns
 
