@@ -13,6 +13,8 @@ import { globalLimiter } from './middleware/rateLimiter.js';
 import topicsRouter from './routes/topics.js';
 import nodesRouter from './routes/nodes.js';
 import miscRouter from './routes/misc.js';
+import { metricsMiddleware, getPrometheusMetrics, getMetricsContentType } from './utils/metrics.js';
+import { openTelemetryMiddleware } from './utils/tracer.js';
 
 // -----------------------------------------------------------------------
 // Structured Logger
@@ -98,9 +100,13 @@ app.use(
       if (res.statusCode >= 400) return 'warn';
       return 'info';
     },
-    autoLogging: { ignore: (req) => req.url === '/health' },
+    autoLogging: { ignore: (req) => req.url === '/health' || req.url === '/metrics' },
   })
 );
+
+// OpenTelemetry Distributed Tracing & Prometheus Metrics Middleware
+app.use(openTelemetryMiddleware);
+app.use(metricsMiddleware);
 
 // -----------------------------------------------------------------------
 // CORS
@@ -191,6 +197,17 @@ app.get('/health', async (_req: Request, res: Response) => {
     res.json({ status: 'ok', db: 'connected', timestamp: new Date().toISOString() });
   } catch (err) {
     res.status(503).json({ status: 'error', db: 'disconnected' });
+  }
+});
+
+// Prometheus Metrics Endpoint (Item 18)
+app.get('/metrics', async (_req: Request, res: Response) => {
+  try {
+    const metrics = await getPrometheusMetrics();
+    res.set('Content-Type', getMetricsContentType());
+    res.send(metrics);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to collect Prometheus metrics' });
   }
 });
 

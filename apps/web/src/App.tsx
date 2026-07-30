@@ -2,6 +2,7 @@ import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { HomePage } from './pages/HomePage';
 import { User } from './types';
+import { getDevUserCredentials, switchDevUser, apiFetch } from './utils/auth';
 
 // Fix #17 — Code splitting: TopicPage (+ Cytoscape.js ~500KB) is loaded lazily
 // only when the user navigates to a topic route.
@@ -45,27 +46,13 @@ export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   useEffect(() => {
-    let storedId = localStorage.getItem('argus_user_id');
-    let storedName = localStorage.getItem('argus_user_name');
-
-    if (!storedId) {
-      storedId = 'usr_' + Math.random().toString(36).substring(2, 9);
-      storedName = 'User_' + storedId.slice(4);
-      localStorage.setItem('argus_user_id', storedId);
-      localStorage.setItem('argus_user_name', storedName);
-    }
-
-    fetchUserProfile(storedId, storedName || undefined);
+    const creds = getDevUserCredentials();
+    fetchUserProfile();
   }, []);
 
-  const fetchUserProfile = async (userId: string, username?: string) => {
+  const fetchUserProfile = async () => {
     try {
-      const res = await fetch('/api/me', {
-        headers: {
-          'X-User-Id': userId,
-          'X-User-Name': username || '',
-        },
-      });
+      const res = await apiFetch('/api/me');
       if (res.ok) {
         const u: User = await res.json();
         setCurrentUser(u);
@@ -76,14 +63,8 @@ export const App: React.FC = () => {
   };
 
   const handleSwitchUser = () => {
-    const names = ['Athena', 'Socrates', 'Hypatia', 'Aristotle', 'Diogenes', 'Cleopatra'];
-    const randomName = names[Math.floor(Math.random() * names.length)];
-    const newId = 'usr_' + randomName.toLowerCase() + '_' + Math.floor(Math.random() * 100);
-
-    localStorage.setItem('argus_user_id', newId);
-    localStorage.setItem('argus_user_name', randomName);
-
-    fetchUserProfile(newId, randomName);
+    switchDevUser();
+    fetchUserProfile();
   };
 
   return (

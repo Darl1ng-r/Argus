@@ -50,4 +50,16 @@ router.get('/search', async (req: Request, res: Response) => {
   }
 });
 
+// GET /metrics — Prometheus Metrics Endpoint (Item 18)
+router.get('/metrics', async (_req: Request, res: Response) => {
+  try {
+    const { getPrometheusMetrics, getMetricsContentType } = await import('../utils/metrics.js');
+    const metrics = await getPrometheusMetrics();
+    res.set('Content-Type', getMetricsContentType());
+    res.send(metrics);
+  } catch (err) {
+    sendError(res, 500, err instanceof Error ? err.message : 'Failed to collect metrics', err);
+  }
+});
+
 export default router;

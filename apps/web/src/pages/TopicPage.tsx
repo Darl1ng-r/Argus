@@ -10,6 +10,7 @@ import { NodeSearchModal } from '../components/NodeSearchModal';
 import { exportGraphAsPNG, exportGraphAsSVG, exportGraphAsMarkdown } from '../utils/exportUtils';
 import { Topic, ClaimNode, ViewMode, EdgeType, User } from '../types';
 import { Core } from 'cytoscape';
+import { apiFetch, getAuthHeaders } from '../utils/auth';
 
 interface TopicSummaryOption {
   id: string;
@@ -85,25 +86,13 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     updateUrlParams(selectedId, mode);
   };
 
-  const getAuthHeaders = useCallback(() => {
-    const userId = localStorage.getItem('argus_user_id') || 'system';
-    const userName = localStorage.getItem('argus_user_name') || 'system';
-    return {
-      'Content-Type': 'application/json',
-      'X-User-Id': userId,
-      'X-User-Name': userName
-    };
-  }, []);
-
   const fetchTopic = useCallback(async (id: string) => {
     setIsLoading(true);
     setErrorMsg(null);
     setNotFound(false);
 
     try {
-      const res = await fetch(`/api/topics/${id}`, {
-        headers: getAuthHeaders()
-      });
+      const res = await apiFetch(`/api/topics/${id}`);
 
       if (res.ok) {
         const data = await res.json();
@@ -255,9 +244,8 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     setAiError(null);
 
     try {
-      const res = await fetch(`/api/topics/${topic.id}/ai-analyze`, {
+      const res = await apiFetch(`/api/topics/${topic.id}/ai-analyze`, {
         method: 'POST',
-        headers: getAuthHeaders(),
       });
 
       if (res.ok) {
@@ -277,7 +265,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   // Fetch list of topics for Diff comparison dropdown when entering Diff view
   useEffect(() => {
     if (viewMode === 'diff' && topicId) {
-      fetch('/api/topics?limit=50')
+      apiFetch('/api/topics?limit=50')
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
           if (data?.topics) {
@@ -300,7 +288,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     setIsDiffLoading(true);
 
     try {
-      const res = await fetch(`/api/topics/${topicId}/diff/${compareId}`);
+      const res = await apiFetch(`/api/topics/${topicId}/diff/${compareId}`);
       if (res.ok) {
         const data = await res.json();
         setDiffResult(data.diff);
@@ -318,9 +306,8 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     const previousTopic = topic;
 
     try {
-      const res = await fetch(`/api/topics/${topic.id}/nodes/${nodeId}/vote`, {
+      const res = await apiFetch(`/api/topics/${topic.id}/nodes/${nodeId}/vote`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ voteType })
       });
 
@@ -354,9 +341,8 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     if (!topic) return;
 
     try {
-      const res = await fetch(`/api/topics/${topic.id}/nodes`, {
+      const res = await apiFetch(`/api/topics/${topic.id}/nodes`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ parentId, edgeType, content })
       });
 
@@ -378,9 +364,8 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   const handleFork = async () => {
     if (!topic) return;
     try {
-      const res = await fetch(`/api/topics/${topic.id}/fork`, {
+      const res = await apiFetch(`/api/topics/${topic.id}/fork`, {
         method: 'POST',
-        headers: getAuthHeaders()
       });
 
       if (res.ok) {

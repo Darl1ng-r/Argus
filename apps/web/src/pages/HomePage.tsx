@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { User } from '../types';
+import { apiFetch } from '../utils/auth';
 
 export interface TopicSummary {
   id: string;
@@ -72,16 +73,8 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
     setIsCreating(true);
 
     try {
-      const userId = localStorage.getItem('argus_user_id') || 'system';
-      const userName = localStorage.getItem('argus_user_name') || 'system';
-
-      const res = await fetch('/api/topics', {
+      const res = await apiFetch('/api/topics', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-Id': userId,
-          'X-User-Name': userName
-        },
         body: JSON.stringify({
           title: newTitle.trim(),
           rootClaim: newRootClaim.trim()
