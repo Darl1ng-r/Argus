@@ -22,29 +22,6 @@ import { mutationLimiter, voteLimiter } from '../middleware/rateLimiter.js';
 const router = Router({ mergeParams: true });
 
 // ---------------------------------------------------------------------------
-// GET /api/topics/:id/cycle-check — public utility, checks for cycles
-// ---------------------------------------------------------------------------
-router.get('/cycle-check', async (req: Request, res: Response) => {
-  try {
-    const topicId = validateIdentifier(req.params.id, 'topicId');
-    const { parentId, childId } = req.query as { parentId?: string; childId?: string };
-
-    if (!parentId || !childId) {
-      return res.status(400).json({ error: 'parentId and childId query params are required' });
-    }
-
-    const sParent = validateIdentifier(parentId, 'parentId');
-    const sChild = validateIdentifier(childId, 'childId');
-
-    const wouldCycle = await detectCycle(topicId, sParent, sChild);
-    res.json({ wouldCycle, parentId: sParent, childId: sChild });
-  } catch (err) {
-    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
-    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
-  }
-});
-
-// ---------------------------------------------------------------------------
 // POST /api/topics/:id/nodes — add a claim node (contributor+)
 // ---------------------------------------------------------------------------
 router.post(

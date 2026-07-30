@@ -56,13 +56,15 @@ export interface TopicMember {
   createdAt: string;
 }
 
-// Fix #9 — paginated response wrapper
+// Fix #9 — cursor & offset paginated response wrapper
 export interface PaginatedTopics {
   topics: TopicSummary[];
   total: number;
-  page: number;
+  page?: number;
   limit: number;
-  totalPages: number;
+  totalPages?: number;
+  nextCursor?: string | null;
+  hasMore?: boolean;
 }
 
 // -----------------------------------------------------------------------
@@ -338,10 +340,46 @@ export async function getTopic(id: string, currentUserId?: string): Promise<Topi
   return getTopicSubgraph(id, undefined, 10, currentUserId);
 }
 
+export function encodeCursor(createdAt: string, id: string): string {
+  return Buffer.from(`${createdAt}|${id}`).toString('base64url');
+}
+
+export function decodeCursor(cursor: string): { createdAt: string; id: string } | null {
+  try {
+    const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+    const [createdAt, id] = raw.split('|');
+    if (createdAt && id) {
+      return { createdAt, id };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // Fix #6 — getAllTopics returns enriched data via single JOIN query
-// Fix #9 — supports cursor-based pagination
-export async function getAllTopics(page = 1, limit = 20): Promise<PaginatedTopics> {
-  const offset = (page - 1) * limit;
+// Fix #8 — supports high-performance cursor-based pagination
+export async function getAllTopics(
+  page = 1,
+  limit = 20,
+  cursor?: string
+): Promise<PaginatedTopics> {
+  const fetchLimit = limit + 1; // Fetch 1 extra to determine nextCursor / hasMore
+
+  let whereClause = '';
+  const queryParams: unknown[] = [fetchLimit];
+
+  if (cursor) {
+    const decoded = decodeCursor(cursor);
+    if (decoded) {
+      whereClause = 'WHERE (t.created_at < $2 OR (t.created_at = $2 AND t.id < $3))';
+      queryParams.push(decoded.createdAt, decoded.id);
+    }
+  } else if (page > 1) {
+    const offset = (page - 1) * limit;
+    whereClause = 'OFFSET $2';
+    queryParams.push(offset);
+  }
 
   const [countResult, topicsResult] = await Promise.all([
     db.query<{ total: string }>('SELECT COUNT(*) AS total FROM topics'),
@@ -367,29 +405,42 @@ export async function getAllTopics(page = 1, limit = 20): Promise<PaginatedTopic
          ON n.topic_id = t.id AND n.status = 'ACTIVE'
        LEFT JOIN nodes root_node
          ON root_node.id = t.root_node_id
+       ${whereClause}
        GROUP BY t.id, root_node.content
-       ORDER BY t.created_at DESC
-       LIMIT $1 OFFSET $2`,
-      [limit, offset]
+       ORDER BY t.created_at DESC, t.id DESC
+       LIMIT $1`,
+      queryParams
     ),
   ]);
 
-  const total = parseInt(countResult.rows[0].total, 10);
+  const total = parseInt(countResult.rows[0]?.total || '0', 10);
+  const rows = topicsResult.rows;
+  const hasMore = rows.length > limit;
+  if (hasMore) {
+    rows.pop(); // Pop extra item
+  }
+
+  const topics: TopicSummary[] = rows.map((t) => ({
+    id: t.id,
+    title: t.title,
+    rootNodeId: t.root_node_id,
+    forkCount: t.fork_count,
+    createdAt: t.created_at.toISOString(),
+    claimCount: parseInt(t.claim_count, 10),
+    rootClaimContent: t.root_claim_content,
+  }));
+
+  const lastTopic = topics[topics.length - 1];
+  const nextCursor = hasMore && lastTopic ? encodeCursor(lastTopic.createdAt, lastTopic.id) : null;
 
   return {
-    topics: topicsResult.rows.map((t) => ({
-      id: t.id,
-      title: t.title,
-      rootNodeId: t.root_node_id,
-      forkCount: t.fork_count,
-      createdAt: t.created_at.toISOString(),
-      claimCount: parseInt(t.claim_count, 10),
-      rootClaimContent: t.root_claim_content,
-    })),
+    topics,
     total,
     page,
     limit,
     totalPages: Math.ceil(total / limit),
+    nextCursor,
+    hasMore,
   };
 }
 
@@ -471,6 +522,20 @@ export async function addClaimNode(
   content: string
 ): Promise<ClaimNode> {
   const user = await getOrCreateUser(authorId);
+
+  // Quota enforcement: Max 50 nodes per user per topic per 24 hours
+  const MAX_NODES_PER_USER_PER_TOPIC_PER_DAY = 50;
+  const quotaResult = await db.query<{ count: string }>(
+    `SELECT COUNT(*) as count FROM nodes
+     WHERE topic_id = $1 AND author_id = $2 AND created_at > NOW() - INTERVAL '24 hours'`,
+    [topicId, user.id]
+  );
+  const userNodeCount = parseInt(quotaResult.rows[0]?.count || '0', 10);
+  if (userNodeCount >= MAX_NODES_PER_USER_PER_TOPIC_PER_DAY) {
+    throw new ValidationError(
+      `Quota exceeded: You can create a maximum of ${MAX_NODES_PER_USER_PER_TOPIC_PER_DAY} claims per topic per 24 hours.`
+    );
+  }
 
   const parentResult = await db.query<{ pos_x: number; pos_y: number }>(
     'SELECT pos_x, pos_y FROM nodes WHERE id = $1 AND topic_id = $2',

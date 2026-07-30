@@ -11,6 +11,7 @@ import {
   forkTopic,
   updateRootClaim,
   compareTopicForks,
+  detectCycle,
   TopicRole,
 } from '../services/graphService.js';
 import { analyzeArgumentGraph } from '../services/aiService.js';
@@ -27,13 +28,15 @@ import { topicSseHandler } from './sse.js';
 const router = Router();
 
 // ---------------------------------------------------------------------------
-// GET /api/topics — paginated topic list
+// GET /api/topics — paginated topic list (supports page or cursor-based pagination)
 // ---------------------------------------------------------------------------
 router.get('/', async (req: Request, res: Response) => {
   try {
     const page = Math.max(1, parseInt(String(req.query.page || '1'), 10));
     const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit || '20'), 10)));
-    const topics = await getAllTopics(page, limit);
+    const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+
+    const topics = await getAllTopics(page, limit, cursor);
 
     res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=30');
     res.json(topics);
@@ -90,6 +93,29 @@ router.get('/:id/subgraph', async (req: Request, res: Response) => {
 // GET /api/topics/:id/events — SSE real-time stream (delegated to sse.ts)
 // ---------------------------------------------------------------------------
 router.get('/:id/events', topicSseHandler);
+
+// ---------------------------------------------------------------------------
+// GET /api/topics/:id/cycle-check — public utility endpoint
+// ---------------------------------------------------------------------------
+router.get('/:id/cycle-check', async (req: Request, res: Response) => {
+  try {
+    const topicId = validateIdentifier(req.params.id, 'topicId');
+    const { parentId, childId } = req.query as { parentId?: string; childId?: string };
+
+    if (!parentId || !childId) {
+      return res.status(400).json({ error: 'parentId and childId query params are required' });
+    }
+
+    const sParent = validateIdentifier(parentId, 'parentId');
+    const sChild = validateIdentifier(childId, 'childId');
+
+    const wouldCycle = await detectCycle(topicId, sParent, sChild);
+    res.json({ wouldCycle, parentId: sParent, childId: sChild });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // POST /api/topics — create a new topic
