@@ -1,6 +1,7 @@
 import { db } from '../db.js';
 import { getCached, setCached, invalidateTopicCache } from '../redis.js';
 import { emitTopicMutation } from './topicEvents.js';
+import { createNotification } from './notificationService.js';
 import { ValidationError } from '../utils/sanitizer.js';
 
 export interface ClaimNode {
@@ -560,14 +561,15 @@ export async function addClaimNode(
     );
   }
 
-  const parentResult = await db.query<{ pos_x: number; pos_y: number }>(
-    'SELECT pos_x, pos_y FROM nodes WHERE id = $1 AND topic_id = $2',
+  const parentResult = await db.query<{ pos_x: number; pos_y: number; author_id: string }>(
+    'SELECT pos_x, pos_y, author_id FROM nodes WHERE id = $1 AND topic_id = $2',
     [parentId, topicId]
   );
   if (parentResult.rowCount === 0) throw new ValidationError(`Parent node not found: ${parentId}`);
 
   const parentX = Number(parentResult.rows[0].pos_x);
   const parentY = Number(parentResult.rows[0].pos_y);
+  const parentAuthorId = parentResult.rows[0].author_id;
 
   const siblingsResult = await db.query<{ count: string }>(
     'SELECT COUNT(*) as count FROM nodes WHERE parent_id = $1 AND topic_id = $2',
@@ -616,6 +618,16 @@ export async function addClaimNode(
     // Invalidate cached subgraphs and broadcast real-time SSE event
     await invalidateTopicCache(topicId);
     emitTopicMutation(topicId, 'node_added', resultNode);
+
+    // Trigger notification to parent claim author
+    createNotification(
+      parentAuthorId,
+      user.id,
+      'NODE_REPLIED',
+      topicId,
+      newNodeId,
+      `Someone added a ${edgeType} claim to your argument.`
+    ).catch(() => {});
 
     return resultNode;
   } catch (err) {
@@ -707,6 +719,18 @@ export async function voteNode(
     // Invalidate cached subgraphs and broadcast real-time SSE event
     await invalidateTopicCache(topicId);
     emitTopicMutation(topicId, 'node_voted', node);
+
+    // Trigger notification to claim author
+    if (activeUserVote && node.authorId) {
+      createNotification(
+        node.authorId,
+        user.id,
+        'NODE_VOTED',
+        topicId,
+        nodeId,
+        `Someone voted ${activeUserVote.toUpperCase()} on your claim.`
+      ).catch(() => {});
+    }
 
     return node;
   } catch (err) {
@@ -1065,4 +1089,106 @@ export async function compareTopicForks(
       sharedNodes,
     },
   };
+}
+
+export interface FlagResult {
+  nodeId: string;
+  flagCount: number;
+  isFlagged: boolean;
+  status: string;
+}
+
+/**
+ * Flags a claim node for moderation (Item 19).
+ * Auto-flags the node (status = 'FLAGGED') if it reaches 3 or more flags.
+ */
+export async function flagClaimNode(
+  topicId: string,
+  nodeId: string,
+  reporterId: string,
+  reason: string
+): Promise<FlagResult> {
+  const user = await getOrCreateUser(reporterId);
+
+  const nodeResult = await db.query<{ id: string; status: string }>(
+    'SELECT id, status FROM nodes WHERE id = $1 AND topic_id = $2',
+    [nodeId, topicId]
+  );
+  if (nodeResult.rowCount === 0) {
+    throw new ValidationError(`Node not found in topic: ${nodeId}`);
+  }
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Insert flag report (unique per user per node)
+    await client.query(
+      `INSERT INTO node_flags (node_id, reporter_id, reason)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (node_id, reporter_id) DO UPDATE SET reason = $3`,
+      [nodeId, user.id, reason]
+    );
+
+    // Count total unique flags for this node
+    const countRes = await client.query<{ count: string }>(
+      'SELECT COUNT(*) as count FROM node_flags WHERE node_id = $1',
+      [nodeId]
+    );
+    const flagCount = parseInt(countRes.rows[0].count, 10);
+
+    let currentStatus = nodeResult.rows[0].status;
+    const isFlagged = flagCount >= 3;
+
+    // Threshold rule: 3 or more flags automatically updates node status to FLAGGED
+    if (isFlagged && currentStatus === 'ACTIVE') {
+      await client.query(
+        "UPDATE nodes SET status = 'FLAGGED' WHERE id = $1 AND topic_id = $2",
+        [nodeId, topicId]
+      );
+      currentStatus = 'FLAGGED';
+    }
+
+    await client.query('COMMIT');
+
+    await invalidateTopicCache(topicId);
+    emitTopicMutation(topicId, 'node_flagged' as any, { nodeId, flagCount, isFlagged, status: currentStatus });
+
+    return {
+      nodeId,
+      flagCount,
+      isFlagged,
+      status: currentStatus,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Moderator action to explicitly set a node's moderation status (ACTIVE, FLAGGED, REMOVED).
+ */
+export async function moderateNode(
+  topicId: string,
+  nodeId: string,
+  action: 'FLAG' | 'UNFLAG' | 'REMOVE'
+): Promise<{ nodeId: string; status: string }> {
+  const newStatus = action === 'FLAG' ? 'FLAGGED' : action === 'REMOVE' ? 'REMOVED' : 'ACTIVE';
+
+  const updateRes = await db.query(
+    'UPDATE nodes SET status = $1 WHERE id = $2 AND topic_id = $3 RETURNING id, status',
+    [newStatus, nodeId, topicId]
+  );
+
+  if (updateRes.rowCount === 0) {
+    throw new ValidationError(`Node not found: ${nodeId}`);
+  }
+
+  await invalidateTopicCache(topicId);
+  emitTopicMutation(topicId, 'node_moderated' as any, { nodeId, status: newStatus });
+
+  return { nodeId, status: newStatus };
 }

@@ -22,4 +22,11 @@ describe('SSRF Protection in Link Preview Service', () => {
     const preview192 = await fetchLinkPreview('http://192.168.1.1/router');
     expect(preview192.description).toContain('preview restricted');
   });
+
+  it('validates and resolves URLs, returning resolved IPs for safe external hosts', async () => {
+    const { validateAndResolveUrl } = await import('../services/linkPreviewService.js');
+    const res = await validateAndResolveUrl('http://localhost:4000/api/topics');
+    expect(res.safe).toBe(false);
+    expect(res.resolvedIps).toEqual([]);
+  });
 });

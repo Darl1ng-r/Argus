@@ -32,6 +32,15 @@ pool.on('connect', () => {
 
 export const db = pool;
 
+/**
+ * Sets active user session context for PostgreSQL Row-Level Security (RLS) evaluation.
+ */
+export async function setSessionUser(client: any, userId: string): Promise<void> {
+  if (userId) {
+    await client.query(`SET LOCAL app.current_user_id = $1`, [userId]);
+  }
+}
+
 export async function testConnection(): Promise<void> {
   const client = await pool.connect();
   try {

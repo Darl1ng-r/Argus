@@ -104,4 +104,58 @@ router.get('/:nodeId/history', async (req: Request, res: Response) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// POST /api/topics/:id/nodes/:nodeId/flag — flag a claim node for moderation (Item 19)
+// ---------------------------------------------------------------------------
+router.post(
+  '/:nodeId/flag',
+  requireAuth,
+  mutationLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const topicId = validateIdentifier(req.params.id, 'topicId');
+      const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
+      const { reason } = req.body as { reason?: string };
+
+      const cleanReason = String(reason || 'Inappropriate content').trim().slice(0, 250);
+      const { flagClaimNode } = await import('../services/graphService.js');
+      const result = await flagClaimNode(topicId, nodeId, req.user!.id, cleanReason);
+
+      res.json(result);
+    } catch (err) {
+      if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+      sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/topics/:id/nodes/:nodeId/moderate — moderator action (Item 19)
+// ---------------------------------------------------------------------------
+router.post(
+  '/:nodeId/moderate',
+  requireAuth,
+  requireTopicRole('owner'),
+  mutationLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const topicId = validateIdentifier(req.params.id, 'topicId');
+      const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
+      const { action } = req.body as { action?: string };
+
+      if (!action || !['FLAG', 'UNFLAG', 'REMOVE'].includes(action.toUpperCase())) {
+        return res.status(400).json({ error: 'Action must be one of FLAG, UNFLAG, REMOVE' });
+      }
+
+      const { moderateNode } = await import('../services/graphService.js');
+      const result = await moderateNode(topicId, nodeId, action.toUpperCase() as any);
+
+      res.json(result);
+    } catch (err) {
+      if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+      sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+    }
+  }
+);
+
 export default router;

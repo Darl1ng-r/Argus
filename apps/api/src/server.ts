@@ -13,6 +13,7 @@ import { globalLimiter } from './middleware/rateLimiter.js';
 import topicsRouter from './routes/topics.js';
 import nodesRouter from './routes/nodes.js';
 import miscRouter from './routes/misc.js';
+import notificationsRouter from './routes/notifications.js';
 import { metricsMiddleware, getPrometheusMetrics, getMetricsContentType } from './utils/metrics.js';
 import { openTelemetryMiddleware } from './utils/tracer.js';
 
@@ -217,6 +218,7 @@ app.get('/metrics', async (_req: Request, res: Response) => {
 app.use('/api', miscRouter);
 app.use('/api/topics', topicsRouter);
 app.use('/api/topics/:id/nodes', nodesRouter);
+app.use('/api/notifications', notificationsRouter);
 
 // -----------------------------------------------------------------------
 // Global Error Handler

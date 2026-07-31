@@ -9,6 +9,7 @@ out/
 
 # Environment files — never commit secrets
 .env
+**/.env
 .env.local
 .env.*.local
 # .env.example IS committed — it documents required variables

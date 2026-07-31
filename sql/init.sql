@@ -88,11 +88,34 @@ CREATE TABLE IF NOT EXISTS node_versions (
     CONSTRAINT uq_node_versions_ver UNIQUE (node_id, version)
 );
 
+CREATE TABLE IF NOT EXISTS node_flags (
+    id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    reporter_id TEXT NOT NULL REFERENCES users(id),
+    reason      VARCHAR(250) NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_node_flags_user UNIQUE (node_id, reporter_id)
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    actor_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type         VARCHAR(50) NOT NULL,
+    topic_id     TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    node_id      TEXT REFERENCES nodes(id) ON DELETE CASCADE,
+    message      TEXT NOT NULL,
+    is_read      BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Basic traversal & search indexes
 CREATE INDEX IF NOT EXISTS idx_nodes_topic_id       ON nodes(topic_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_parent_id      ON nodes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_topics_forked_from   ON topics(forked_from_id);
 CREATE INDEX IF NOT EXISTS idx_node_versions_node   ON node_versions(node_id, version DESC);
+CREATE INDEX IF NOT EXISTS idx_node_flags_node      ON node_flags(node_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_user   ON notifications(user_id, is_read, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_edges_from_node      ON edges(from_node_id);
 CREATE INDEX IF NOT EXISTS idx_edges_to_node        ON edges(to_node_id);
 CREATE INDEX IF NOT EXISTS idx_edges_topic          ON edges(topic_id);
@@ -144,12 +167,30 @@ CREATE INDEX IF NOT EXISTS idx_topic_members_lookup
 -- ============================================================
 -- ROW-LEVEL SECURITY (RLS) POLICIES
 -- ============================================================
--- Enable RLS on core tables
+-- Enable & FORCE RLS on all core tables (FORCE ensures RLS is evaluated even for table owners/superusers)
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users FORCE ROW LEVEL SECURITY;
+
 ALTER TABLE topics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE topics FORCE ROW LEVEL SECURITY;
+
 ALTER TABLE nodes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE nodes FORCE ROW LEVEL SECURITY;
+
 ALTER TABLE votes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE votes FORCE ROW LEVEL SECURITY;
+
 ALTER TABLE topic_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE topic_members FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE node_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE node_versions FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE node_flags ENABLE ROW LEVEL SECURITY;
+ALTER TABLE node_flags FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications FORCE ROW LEVEL SECURITY;
 
 -- Permissive public read access for public debate graphs
 CREATE POLICY rls_users_select ON users FOR SELECT USING (true);
@@ -157,6 +198,12 @@ CREATE POLICY rls_topics_select ON topics FOR SELECT USING (true);
 CREATE POLICY rls_nodes_select ON nodes FOR SELECT USING (true);
 CREATE POLICY rls_votes_select ON votes FOR SELECT USING (true);
 CREATE POLICY rls_members_select ON topic_members FOR SELECT USING (true);
+CREATE POLICY rls_versions_select ON node_versions FOR SELECT USING (true);
+CREATE POLICY rls_flags_select ON node_flags FOR SELECT USING (true);
+
+-- User-isolated notifications RLS policies
+CREATE POLICY rls_notifications_select ON notifications FOR SELECT
+    USING (user_id = current_setting('app.current_user_id', true) OR current_setting('app.current_user_id', true) IS NULL OR current_setting('app.current_user_id', true) = '');
 
 -- Restrict topic updates to topic members holding 'owner' role
 CREATE POLICY rls_topics_update ON topics FOR UPDATE
