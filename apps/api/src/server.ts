@@ -155,8 +155,14 @@ app.use(async (req: Request, _res: Response, next: NextFunction) => {
       if (secretKey) {
         try {
           const payload = await verifyToken(token, { secretKey });
+          // Fix 5: validate sub format before it reaches the DB layer
           if (payload?.sub) {
-            resolvedId = payload.sub;
+            const { validateIdentifier } = await import('./utils/sanitizer.js');
+            try {
+              resolvedId = validateIdentifier(payload.sub, 'sub');
+            } catch {
+              req.log.warn({ sub: payload.sub }, '[AUTH] JWT sub failed identifier validation — ignoring');
+            }
           }
         } catch (err) {
           if (IS_PRODUCTION) {
@@ -202,7 +208,26 @@ app.get('/health', async (_req: Request, res: Response) => {
 });
 
 // Prometheus Metrics Endpoint (Item 18)
-app.get('/metrics', async (_req: Request, res: Response) => {
+// Fix 1: Protected by METRICS_TOKEN bearer check to prevent intelligence leakage.
+// Set METRICS_TOKEN env var; Prometheus scraper must send: Authorization: Bearer <token>
+// In dev (no METRICS_TOKEN set), access is allowed with a logged warning.
+app.get('/metrics', async (req: Request, res: Response) => {
+  const metricsToken = process.env.METRICS_TOKEN;
+  if (IS_PRODUCTION && metricsToken) {
+    const authHeader = req.headers['authorization'];
+    const provided = typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7).trim()
+      : null;
+    if (provided !== metricsToken) {
+      return res.status(403).json({ error: 'Forbidden: valid METRICS_TOKEN required.' });
+    }
+  } else if (!metricsToken && IS_PRODUCTION) {
+    // Prod without a token configured — refuse entirely rather than expose data
+    logger.error('[METRICS] METRICS_TOKEN is not set in production. Blocking /metrics.');
+    return res.status(403).json({ error: 'Metrics endpoint is not configured.' });
+  } else if (!metricsToken) {
+    logger.warn('[METRICS] METRICS_TOKEN not set — /metrics is open (dev mode only).');
+  }
   try {
     const metrics = await getPrometheusMetrics();
     res.set('Content-Type', getMetricsContentType());

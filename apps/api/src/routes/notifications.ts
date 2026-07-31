@@ -9,6 +9,58 @@ import {
 } from '../services/notificationService.js';
 import { requireAuth, sendError } from '../middleware/index.js';
 
+// ---------------------------------------------------------------------------
+// Shared Redis multiplexer for notification SSE — one subscriber per userId
+// ---------------------------------------------------------------------------
+
+type NotifCallback = (raw: string) => void;
+
+interface UserNotifSubscription {
+  redis: Redis;
+  callbacks: Set<NotifCallback>;
+}
+
+const userNotifSubs = new Map<string, UserNotifSubscription>();
+
+async function subscribeToUserNotifications(
+  userId: string,
+  callback: NotifCallback
+): Promise<() => Promise<void>> {
+  if (!process.env.REDIS_URL) return async () => {};
+
+  let sub = userNotifSubs.get(userId);
+  if (!sub) {
+    const redis = new Redis(process.env.REDIS_URL, {
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+      lazyConnect: true,
+    });
+    const callbacks = new Set<NotifCallback>();
+    sub = { redis, callbacks };
+    userNotifSubs.set(userId, sub);
+    await redis.subscribe(`argus:user:${userId}:notifications`);
+    redis.on('message', (_ch, raw) => {
+      for (const cb of callbacks) cb(raw);
+    });
+    redis.on('error', () => {});
+  }
+
+  sub.callbacks.add(callback);
+
+  return async () => {
+    const current = userNotifSubs.get(userId);
+    if (!current) return;
+    current.callbacks.delete(callback);
+    if (current.callbacks.size === 0) {
+      userNotifSubs.delete(userId);
+      try {
+        await current.redis.unsubscribe(`argus:user:${userId}:notifications`);
+        current.redis.disconnect();
+      } catch {}
+    }
+  };
+}
+
 const router = Router();
 
 // All notification routes require authentication
@@ -57,6 +109,7 @@ router.post('/mark-read', async (req: Request, res: Response) => {
 
 // ---------------------------------------------------------------------------
 // GET /api/notifications/events — real-time SSE notification stream for logged-in user
+// Fix 3 (notifications): shared Redis subscriber per userId, not per connection
 // ---------------------------------------------------------------------------
 router.get('/events', async (req: Request, res: Response) => {
   try {
@@ -81,40 +134,20 @@ router.get('/events', async (req: Request, res: Response) => {
       if (!res.writableEnded) res.write(': heartbeat\n\n');
     }, 20_000);
 
-    let redisSubscriber: Redis | null = null;
-    const pubSubChannel = `argus:user:${userId}:notifications`;
-
-    if (process.env.REDIS_URL) {
+    const redisCallback: NotifCallback = (raw) => {
       try {
-        redisSubscriber = new Redis(process.env.REDIS_URL, {
-          maxRetriesPerRequest: null,
-          enableReadyCheck: false,
-          lazyConnect: true,
-        });
+        writeEvent('notification', JSON.parse(raw));
+      } catch {}
+    };
 
-        await redisSubscriber.subscribe(pubSubChannel);
-
-        redisSubscriber.on('message', (_channel, raw) => {
-          try {
-            const item = JSON.parse(raw);
-            writeEvent('notification', item);
-          } catch {
-            // Ignore parse errors
-          }
-        });
-      } catch {
-        redisSubscriber = null;
-      }
-    }
+    let unsubscribeRedis: () => Promise<void> = async () => {};
+    try {
+      unsubscribeRedis = await subscribeToUserNotifications(userId, redisCallback);
+    } catch {}
 
     req.on('close', async () => {
       clearInterval(heartbeat);
-      if (redisSubscriber) {
-        try {
-          await redisSubscriber.unsubscribe(pubSubChannel);
-          redisSubscriber.disconnect();
-        } catch {}
-      }
+      await unsubscribeRedis();
       if (!res.writableEnded) res.end();
     });
   } catch (err) {

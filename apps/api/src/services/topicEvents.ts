@@ -9,7 +9,8 @@ export const topicEvents = new TopicEventEmitter();
 topicEvents.setMaxListeners(0); // Unlimited — managed per-topic in SSE handler
 
 export interface TopicMutationEvent {
-  type: 'node_added' | 'node_voted' | 'root_updated';
+  // Fix 7: added 'ai_analysis_completed' to remove the `as any` cast in aiQueueService.ts
+  type: 'node_added' | 'node_voted' | 'root_updated' | 'ai_analysis_completed';
   topicId: string;
   payload: unknown;
   timestamp: string;

@@ -4,115 +4,145 @@
  * Architecture:
  *  - Each SSE client subscribes to BOTH:
  *    1. The in-process EventEmitter (fast path — same API instance mutations)
- *    2. A Redis Pub/Sub subscription (cross-instance fan-out for horizontally scaled deployments)
- *  - Events are deduplicated on the client via the event `id` field and `Last-Event-ID`.
- *  - Each SSE connection creates its own dedicated Redis subscriber connection (required by ioredis
- *    since a subscribed client cannot issue regular commands).
- *  - The Redis subscriber is properly torn down when the client disconnects.
+ *    2. A shared Redis Pub/Sub multiplexer (cross-instance fan-out)
+ *
+ * Fix 3 — Redis connection per CLIENT → per TOPIC:
+ *  - Previously each connected SSE client opened its own `new Redis(...)` subscriber.
+ *    At 1,000 clients watching the same topic that was 1,000 Redis connections.
+ *  - Now a single Redis subscriber is shared across all clients watching the same topic.
+ *    Connection count is O(unique topics being watched), not O(total SSE clients).
+ *
+ * Teardown:
+ *  - When the last client for a topic disconnects, the shared subscriber is unsubscribed
+ *    and disconnected. New connections recreate it transparently.
  */
 import { Request, Response } from 'express';
 import { Redis } from 'ioredis';
 import { topicEvents, TopicMutationEvent, topicPubSubChannel } from '../services/topicEvents.js';
 import { validateIdentifier, ValidationError } from '../utils/sanitizer.js';
 import { sendError } from '../middleware/index.js';
-import { globalLimiter } from '../middleware/rateLimiter.js';
 
-// Track open SSE connections per topic for monitoring / diagnostics
+// ---------------------------------------------------------------------------
+// Shared Redis multiplexer — one subscriber per topic, many SSE clients
+// ---------------------------------------------------------------------------
+
+type MessageCallback = (event: TopicMutationEvent) => void;
+
+interface TopicSubscription {
+  redis: Redis;
+  callbacks: Set<MessageCallback>;
+}
+
+/** Module-level map: topicId → shared subscriber + callback set. */
+const topicSubscriptions = new Map<string, TopicSubscription>();
+
+/**
+ * Registers a callback for Redis Pub/Sub events on a topic.
+ * Creates the shared subscriber on first client; tears it down after last client leaves.
+ * Returns an async cleanup function to call on disconnect.
+ */
+async function subscribeToTopicRedis(
+  topicId: string,
+  callback: MessageCallback
+): Promise<() => Promise<void>> {
+  if (!process.env.REDIS_URL) {
+    return async () => {};
+  }
+
+  let sub = topicSubscriptions.get(topicId);
+
+  if (!sub) {
+    const redis = new Redis(process.env.REDIS_URL, {
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+      lazyConnect: true,
+    });
+
+    const callbacks = new Set<MessageCallback>();
+    sub = { redis, callbacks };
+    topicSubscriptions.set(topicId, sub);
+
+    await redis.subscribe(topicPubSubChannel(topicId));
+
+    redis.on('message', (_ch: string, raw: string) => {
+      try {
+        const event: TopicMutationEvent = JSON.parse(raw);
+        for (const cb of callbacks) cb(event);
+      } catch {
+        // Ignore malformed Pub/Sub messages
+      }
+    });
+
+    redis.on('error', () => {
+      // Non-fatal — local EventEmitter still delivers same-instance events
+    });
+  }
+
+  sub.callbacks.add(callback);
+
+  return async () => {
+    const current = topicSubscriptions.get(topicId);
+    if (!current) return;
+    current.callbacks.delete(callback);
+    if (current.callbacks.size === 0) {
+      topicSubscriptions.delete(topicId);
+      try {
+        await current.redis.unsubscribe(topicPubSubChannel(topicId));
+        current.redis.disconnect();
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Connection tracking
+// ---------------------------------------------------------------------------
 const openConnections = new Map<string, number>();
 
 export async function topicSseHandler(req: Request, res: Response): Promise<void> {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
 
-    // --- SSE headers ---
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx buffering
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
-    // Track connection count
     openConnections.set(topicId, (openConnections.get(topicId) ?? 0) + 1);
 
     let eventSeq = 0;
-
-    /**
-     * Writes a single SSE event with an incrementing sequence ID.
-     * The sequence ID lets clients use Last-Event-ID for reconnect replay (future work).
-     */
     function writeEvent(type: string, data: unknown): void {
       if (res.writableEnded) return;
       res.write(`id: ${++eventSeq}\nevent: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
     }
 
-    // Initial handshake ping
     writeEvent('connected', { status: 'live', topicId });
 
-    // Heartbeat every 20s to keep the connection alive through proxies / load balancers
     const heartbeat = setInterval(() => {
       if (!res.writableEnded) res.write(': heartbeat\n\n');
     }, 20_000);
 
-    // --- Local EventEmitter subscription (same-instance fast path) ---
+    // Local EventEmitter — same-instance fast path
     const localChannel = `topic:${topicId}`;
-    const onLocalMutation = (event: TopicMutationEvent) => {
-      writeEvent(event.type, event.payload);
-    };
+    const onLocalMutation = (event: TopicMutationEvent) => writeEvent(event.type, event.payload);
     topicEvents.on(localChannel, onLocalMutation);
 
-    // --- Redis Pub/Sub subscription (cross-instance fan-out) ---
-    let redisSubscriber: Redis | null = null;
-    const pubSubChannel = topicPubSubChannel(topicId);
-
-    if (process.env.REDIS_URL) {
-      try {
-        redisSubscriber = new Redis(process.env.REDIS_URL, {
-          maxRetriesPerRequest: null,
-          enableReadyCheck: false,
-          lazyConnect: true,
-        });
-
-        await redisSubscriber.subscribe(pubSubChannel);
-
-        redisSubscriber.on('message', (_channel: string, raw: string) => {
-          try {
-            const event: TopicMutationEvent = JSON.parse(raw);
-            // Only write Redis events if the local EventEmitter hasn't already delivered them.
-            // Since local mutations emit to BOTH local EventEmitter AND Redis, same-instance clients
-            // would receive duplicates without this guard. The local emitter fires synchronously
-            // (within the same tick), so we use a short dedup window via a seen-set on seq IDs.
-            // Simplest approach: Redis subscriber only serves cross-instance events, which the
-            // local EventEmitter will NOT have fired (different process). No dedup needed.
-            // NOTE: If both fire for same-instance events, the client deduplicates by event `id`.
-            writeEvent(event.type, event.payload);
-          } catch {
-            // Ignore malformed Pub/Sub messages
-          }
-        });
-
-        redisSubscriber.on('error', (err) => {
-          req.log?.warn({ err }, '[SSE] Redis subscriber error');
-        });
-      } catch (err) {
-        req.log?.warn({ err }, '[SSE] Failed to create Redis subscriber — falling back to local-only');
-        redisSubscriber = null;
-      }
+    // Shared Redis multiplexer — cross-instance fan-out
+    const redisCallback: MessageCallback = (event) => writeEvent(event.type, event.payload);
+    let unsubscribeRedis: () => Promise<void> = async () => {};
+    try {
+      unsubscribeRedis = await subscribeToTopicRedis(topicId, redisCallback);
+    } catch (err) {
+      req.log?.warn({ err }, '[SSE] Failed to subscribe to Redis — falling back to local-only');
     }
 
-    // --- Cleanup on client disconnect ---
     req.on('close', async () => {
       clearInterval(heartbeat);
       topicEvents.removeListener(localChannel, onLocalMutation);
-
-      if (redisSubscriber) {
-        try {
-          await redisSubscriber.unsubscribe(pubSubChannel);
-          redisSubscriber.disconnect();
-        } catch {
-          // Ignore cleanup errors
-        }
-      }
-
+      await unsubscribeRedis();
       openConnections.set(topicId, Math.max(0, (openConnections.get(topicId) ?? 1) - 1));
       if (!res.writableEnded) res.end();
     });

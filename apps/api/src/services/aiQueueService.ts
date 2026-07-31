@@ -54,7 +54,7 @@ if (REDIS_URL && process.env.NODE_ENV !== 'test') {
         await setCached(`ai-job-result:${job.id}`, result, 3600);
 
         // Emit SSE event to all connected clients on this topic
-        emitTopicMutation(topicId, 'ai_analysis_completed' as any, {
+        emitTopicMutation(topicId, 'ai_analysis_completed', {
           jobId: job.id,
           result,
         });

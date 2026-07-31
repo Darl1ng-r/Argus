@@ -56,6 +56,9 @@ export function switchDevUser(): { id: string; name: string } {
 /**
  * Generates standard request headers for API requests.
  * Always includes `Authorization: Bearer <token>` header.
+ * Fix 4: X-User-Id / X-User-Name headers are ONLY sent in DEV builds.
+ * In production (import.meta.env.DEV === false) they are never emitted,
+ * preventing accidental bypass if ALLOW_DEV_AUTH were ever misconfigured.
  */
 export function getAuthHeaders(): Record<string, string> {
   const token = getAuthToken();
@@ -67,15 +70,19 @@ export function getAuthHeaders(): Record<string, string> {
 
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
-  } else {
-    // Standard Bearer token format fallback for dev environment
+  } else if (import.meta.env.DEV) {
+    // Dev-only fallback: send a recognisable-but-fake Bearer token and the
+    // custom X-User-Id / X-User-Name headers the ALLOW_DEV_AUTH path reads.
     headers['Authorization'] = `Bearer dev_session_${devUser.id}`;
     headers['X-User-Id'] = devUser.id;
     headers['X-User-Name'] = devUser.name;
   }
+  // In production without a token: no Authorization header is sent.
+  // The server will treat the request as unauthenticated (401 on protected routes).
 
   return headers;
 }
+
 
 /**
  * Standardized fetch wrapper that automatically injects auth headers.

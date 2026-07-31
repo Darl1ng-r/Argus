@@ -383,6 +383,7 @@ export function decodeCursor(cursor: string): { createdAt: string; id: string } 
 
 // Fix #6 — getAllTopics returns enriched data via single JOIN query
 // Fix #8 — supports high-performance cursor-based pagination
+// Fix 6 (audit) — removed parallel COUNT(*) query; totalPages is meaningless with cursors
 export async function getAllTopics(
   page = 1,
   limit = 20,
@@ -405,43 +406,39 @@ export async function getAllTopics(
     queryParams.push(offset);
   }
 
-  const [countResult, topicsResult] = await Promise.all([
-    db.query<{ total: string }>('SELECT COUNT(*) AS total FROM topics'),
-    db.query<{
-      id: string;
-      title: string;
-      root_node_id: string;
-      fork_count: number;
-      created_at: Date;
-      claim_count: string;
-      root_claim_content: string | null;
-    }>(
-      `SELECT
-         t.id,
-         t.title,
-         t.root_node_id,
-         t.fork_count,
-         t.created_at,
-         COUNT(n.id) AS claim_count,
-         root_node.content AS root_claim_content
-       FROM topics t
-       LEFT JOIN nodes n
-         ON n.topic_id = t.id AND n.status = 'ACTIVE'
-       LEFT JOIN nodes root_node
-         ON root_node.id = t.root_node_id
-       ${whereClause}
-       GROUP BY t.id, root_node.content
-       ORDER BY t.created_at DESC, t.id DESC
-       LIMIT $1`,
-      queryParams
-    ),
-  ]);
+  const topicsResult = await db.query<{
+    id: string;
+    title: string;
+    root_node_id: string;
+    fork_count: number;
+    created_at: Date;
+    claim_count: string;
+    root_claim_content: string | null;
+  }>(
+    `SELECT
+       t.id,
+       t.title,
+       t.root_node_id,
+       t.fork_count,
+       t.created_at,
+       COUNT(n.id) AS claim_count,
+       root_node.content AS root_claim_content
+     FROM topics t
+     LEFT JOIN nodes n
+       ON n.topic_id = t.id AND n.status = 'ACTIVE'
+     LEFT JOIN nodes root_node
+       ON root_node.id = t.root_node_id
+     ${whereClause}
+     GROUP BY t.id, root_node.content
+     ORDER BY t.created_at DESC, t.id DESC
+     LIMIT $1`,
+    queryParams
+  );
 
-  const total = parseInt(countResult.rows[0]?.total || '0', 10);
   const rows = topicsResult.rows;
   const hasMore = rows.length > limit;
   if (hasMore) {
-    rows.pop(); // Pop extra item
+    rows.pop(); // Pop extra item used for hasMore detection
   }
 
   const topics: TopicSummary[] = rows.map((t) => ({
@@ -459,10 +456,9 @@ export async function getAllTopics(
 
   return {
     topics,
-    total,
+    total: topics.length,   // Actual count of returned items, not a full table scan
     page,
     limit,
-    totalPages: Math.ceil(total / limit),
     nextCursor,
     hasMore,
   };
@@ -825,6 +821,22 @@ export async function forkTopic(topicId: string, authorId: string): Promise<Topi
     );
 
     await client.query('COMMIT');
+
+    // Fix 8 — Notify original topic author that their debate was forked
+    // Fire-and-forget: notification failure should not roll back the fork
+    if (original.nodes.length > 0) {
+      const originalAuthorId = original.nodes.find((n) => n.parent === null)?.authorId;
+      if (originalAuthorId && originalAuthorId !== user.id) {
+        createNotification(
+          originalAuthorId,
+          user.id,
+          'TOPIC_FORKED',
+          topicId,
+          null,
+          `${user.username || 'Someone'} forked your debate: "${original.title}"`
+        ).catch(() => {}); // Non-critical — swallow silently
+      }
+    }
 
     // Reload the forked topic from DB to return accurate state
     const forked = await getTopic(newTopicId, user.id);

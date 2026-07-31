@@ -30,6 +30,14 @@ export async function idempotencyGuard(req: Request, res: Response, next: NextFu
     return next();
   }
 
+  // Fix 9: reject oversized keys before touching Redis
+  const MAX_KEY_LEN = 128;
+  if (idempotencyKey.trim().length > MAX_KEY_LEN) {
+    return res.status(400).json({
+      error: `Idempotency-Key must not exceed ${MAX_KEY_LEN} characters.`,
+    });
+  }
+
   const userId = req.user?.id || 'anon';
   const cacheKey = `idempotency:${userId}:${idempotencyKey.trim()}`;
 

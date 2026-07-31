@@ -8,7 +8,7 @@
  *  - TOPIC_FORKED: Someone forked your debate topic.
  */
 
-import { db } from '../db.js';
+import { db, withUserSession } from '../db.js';
 import { publishEvent } from '../redis.js';
 
 export interface NotificationItem {
@@ -81,6 +81,7 @@ export async function createNotification(
 
 /**
  * Fetches user notifications and total unread count.
+ * Fix 2: wrapped in withUserSession so RLS policy is enforced.
  */
 export async function getUserNotifications(
   userId: string,
@@ -91,65 +92,70 @@ export async function getUserNotifications(
     ? 'WHERE user_id = $1 AND is_read = FALSE'
     : 'WHERE user_id = $1';
 
-  const [listRes, countRes] = await Promise.all([
-    db.query<{
-      id: string;
-      user_id: string;
-      actor_id: string;
-      type: string;
-      topic_id: string;
-      node_id: string | null;
-      message: string;
-      is_read: boolean;
-      created_at: Date;
-    }>(
-      `SELECT id, user_id, actor_id, type, topic_id, node_id, message, is_read, created_at
-       FROM notifications
-       ${whereClause}
-       ORDER BY created_at DESC
-       LIMIT $2`,
-      [userId, limit]
-    ),
-    db.query<{ count: string }>(
-      'SELECT COUNT(*) as count FROM notifications WHERE user_id = $1 AND is_read = FALSE',
-      [userId]
-    ),
-  ]);
+  return withUserSession(userId, async (client) => {
+    const [listRes, countRes] = await Promise.all([
+      client.query<{
+        id: string;
+        user_id: string;
+        actor_id: string;
+        type: string;
+        topic_id: string;
+        node_id: string | null;
+        message: string;
+        is_read: boolean;
+        created_at: Date;
+      }>(
+        `SELECT id, user_id, actor_id, type, topic_id, node_id, message, is_read, created_at
+         FROM notifications
+         ${whereClause}
+         ORDER BY created_at DESC
+         LIMIT $2`,
+        [userId, limit]
+      ),
+      client.query<{ count: string }>(
+        'SELECT COUNT(*) as count FROM notifications WHERE user_id = $1 AND is_read = FALSE',
+        [userId]
+      ),
+    ]);
 
-  const unreadCount = parseInt(countRes.rows[0]?.count || '0', 10);
-  const notifications: NotificationItem[] = listRes.rows.map((r) => ({
-    id: r.id,
-    userId: r.user_id,
-    actorId: r.actor_id,
-    type: r.type as NotificationItem['type'],
-    topicId: r.topic_id,
-    nodeId: r.node_id,
-    message: r.message,
-    isRead: r.is_read,
-    createdAt: r.created_at.toISOString(),
-  }));
+    const unreadCount = parseInt(countRes.rows[0]?.count || '0', 10);
+    const notifications: NotificationItem[] = listRes.rows.map((r) => ({
+      id: r.id,
+      userId: r.user_id,
+      actorId: r.actor_id,
+      type: r.type as NotificationItem['type'],
+      topicId: r.topic_id,
+      nodeId: r.node_id,
+      message: r.message,
+      isRead: r.is_read,
+      createdAt: r.created_at.toISOString(),
+    }));
 
-  return { notifications, unreadCount };
+    return { notifications, unreadCount };
+  });
 }
 
 /**
  * Marks notifications as read. If notificationIds is empty/undefined, marks ALL as read for the user.
+ * Fix 2: wrapped in withUserSession so RLS policy is enforced.
  */
 export async function markNotificationsAsRead(
   userId: string,
   notificationIds?: string[]
 ): Promise<number> {
-  if (notificationIds && notificationIds.length > 0) {
-    const res = await db.query(
-      `UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND id = ANY($2::text[])`,
-      [userId, notificationIds]
-    );
-    return res.rowCount || 0;
-  } else {
-    const res = await db.query(
-      `UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND is_read = FALSE`,
-      [userId]
-    );
-    return res.rowCount || 0;
-  }
+  return withUserSession(userId, async (client) => {
+    if (notificationIds && notificationIds.length > 0) {
+      const res = await client.query(
+        `UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND id = ANY($2::text[])`,
+        [userId, notificationIds]
+      );
+      return res.rowCount || 0;
+    } else {
+      const res = await client.query(
+        `UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND is_read = FALSE`,
+        [userId]
+      );
+      return res.rowCount || 0;
+    }
+  });
 }
