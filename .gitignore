@@ -1,28 +1,42 @@
 # Dependencies
 node_modules/
 .pnpm-store/
+.yarn/
+.npm/
 
-# Build outputs
+# Build & Output directories
 dist/
+dist-*/
 build/
 out/
+*.tsbuildinfo
 
-# Environment files — never commit secrets
+# Test & Coverage outputs
+coverage/
+.vitest/
+*.lcov
+
+# Environment files — never commit secrets!
 .env
-**/.env
-.env.local
-.env.*.local
-# .env.example IS committed — it documents required variables
+.env.*
 !.env.example
+!.env.*.example
 
-# Tooling / Analysis outputs
+# Tooling, AI, & Analysis outputs
 graphify-out/
+.graphify/
+
+# Vite / Bundler caches & temp files
+.vite/
+.cache/
+.temp/
+tmp/
+*.timestamp-*
 
 # Logs
 *.log
 npm-debug.log*
 yarn-debug.log*
-yarn-error.log*
 pnpm-debug.log*
 
 # IDE & Editor settings
@@ -30,11 +44,22 @@ pnpm-debug.log*
 .idea/
 *.swp
 *.swo
+*.sublime-project
+*.sublime-workspace
+.project
+.settings/
 
 # Operating System files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
-# Database / SQLite local data
+# Database / Local SQLite data
 *.db
+*.sqlite
+*.sqlite3
 *.db-journal
