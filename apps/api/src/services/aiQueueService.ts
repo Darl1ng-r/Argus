@@ -1,6 +1,6 @@
 import { Queue, Worker, Job } from 'bullmq';
-import { analyzeArgumentGraph, AIAnalysisResult } from './aiService.js';
-import { getTopic } from './graphService.js';
+import { analyzeArgumentGraph, AIAnalysisResult, getCachedAiResult, setCachedAiResult } from './aiService.js';
+import { getTopicFlatNodes, getTopic } from './graphService.js';
 import { getCached, setCached } from '../redis.js';
 import { emitTopicMutation } from './topicEvents.js';
 
@@ -45,10 +45,15 @@ if (REDIS_URL && process.env.NODE_ENV !== 'test') {
       'ai-analysis-queue',
       async (job: Job<AIJobData>) => {
         const { topicId, userId } = job.data;
-        const topic = await getTopic(topicId, userId);
-        if (!topic) throw new Error(`Topic not found: ${topicId}`);
+        // Fix P-2: Use flat nodes instead of full recursive subgraph
+        const nodes = await getTopicFlatNodes(topicId);
+        if (!nodes || nodes.length === 0) throw new Error(`No active nodes found for topic: ${topicId}`);
 
-        const result = await analyzeArgumentGraph(topic);
+        // Fetch just the topic title (lightweight)
+        const topicMeta = await getTopic(topicId, userId);
+        const topicTitle = topicMeta?.title || topicId;
+
+        const result = await analyzeArgumentGraph(topicTitle, nodes);
 
         // Store result in Redis cache (1 hour TTL)
         await setCached(`ai-job-result:${job.id}`, result, 3600);
@@ -89,11 +94,23 @@ export async function enqueueAIAnalysis(
   }
 
   // Fallback: Synchronous execution if Queue is unavailable (or during test mode)
-  const topic = await getTopic(topicId, userId);
-  if (!topic) throw new Error(`Topic not found: ${topicId}`);
-  const result = await analyzeArgumentGraph(topic);
+  // Fix F-6: Check in-memory cache before re-analyzing (prevents Gemini re-invocation without Redis)
+  const cached = getCachedAiResult(topicId);
+  if (cached) {
+    const jobId = `cached-${topicId}`;
+    return { jobId, status: 'completed', result: cached };
+  }
+
+  // Fix P-2: Use flat nodes instead of full recursive subgraph
+  const nodes = await getTopicFlatNodes(topicId);
+  if (!nodes || nodes.length === 0) throw new Error(`No active nodes found for topic: ${topicId}`);
+  const topicMeta = await getTopic(topicId, userId);
+  const topicTitle = topicMeta?.title || topicId;
+
+  const result = await analyzeArgumentGraph(topicTitle, nodes);
   const jobId = `sync-${Date.now()}`;
   await setCached(`ai-job-result:${jobId}`, result, 3600);
+  setCachedAiResult(topicId, result); // Fix F-6: populate in-memory fallback cache
   return { jobId, status: 'completed', result };
 }
 

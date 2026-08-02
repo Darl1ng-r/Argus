@@ -119,7 +119,13 @@ CREATE INDEX IF NOT EXISTS idx_notifications_user   ON notifications(user_id, is
 CREATE INDEX IF NOT EXISTS idx_edges_from_node      ON edges(from_node_id);
 CREATE INDEX IF NOT EXISTS idx_edges_to_node        ON edges(to_node_id);
 CREATE INDEX IF NOT EXISTS idx_edges_topic          ON edges(topic_id);
-CREATE INDEX IF NOT EXISTS idx_votes_node_id        ON votes(node_id);
+CREATE INDEX IF NOT EXISTS idx_votes_user_id ON votes (user_id);
+CREATE INDEX IF NOT EXISTS idx_votes_node_id ON votes (node_id);
+-- Fix P-6: Composite partial index for the vote-overlay query pattern in getTopicSubgraph.
+-- Avoids full scan of idx_votes_user_id when joining on node_id for a specific user.
+CREATE INDEX IF NOT EXISTS idx_votes_user_node_partial
+  ON votes (user_id, node_id)
+  WHERE vote_type IS NOT NULL;
 
 -- Full-text search indexes (GIN on tsvector)
 ALTER TABLE nodes ADD COLUMN IF NOT EXISTS content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;

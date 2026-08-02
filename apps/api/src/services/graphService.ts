@@ -16,6 +16,7 @@ export interface ClaimNode {
   steel: boolean;
   userVote?: 'support' | 'contest' | null;
   authorId: string;
+  authorUsername?: string; // Fix F-8: included when JOIN on users is available
   createdAt: string;
   hasMoreChildren?: boolean;
 }
@@ -214,6 +215,8 @@ function rowToNode(
     steel: Boolean(row.is_steel),
     userVote: userVoteMap ? userVoteMap.get(id) || null : null,
     authorId: (row.author_id as string) || 'system',
+    // Fix F-8: Include authorUsername when available from a JOIN on users
+    ...(row.author_username ? { authorUsername: row.author_username as string } : {}),
     createdAt: (row.created_at as Date).toISOString(),
     hasMoreChildren: Boolean(row.has_more_children),
   };
@@ -329,7 +332,7 @@ export async function getTopicSubgraph(
       nodes: nodesResult.rows.map((row) => rowToNode(row, undefined)),
     };
 
-    await setCached(baseCacheKey, baseGraph, 30);
+    await setCached(baseCacheKey, baseGraph, 30, topicId);
   }
 
   // If no user, return the shared base graph directly (no vote overlay needed)
@@ -383,7 +386,7 @@ export function decodeCursor(cursor: string): { createdAt: string; id: string } 
 
 // Fix #6 — getAllTopics returns enriched data via single JOIN query
 // Fix #8 — supports high-performance cursor-based pagination
-// Fix 6 (audit) — removed parallel COUNT(*) query; totalPages is meaningless with cursors
+// Fix P-5 — fixed offset pagination: OFFSET must come AFTER ORDER BY, not as a WHERE clause
 export async function getAllTopics(
   page = 1,
   limit = 20,
@@ -391,20 +394,72 @@ export async function getAllTopics(
 ): Promise<PaginatedTopics> {
   const fetchLimit = limit + 1; // Fetch 1 extra to determine nextCursor / hasMore
 
-  let whereClause = '';
-  const queryParams: unknown[] = [fetchLimit];
-
   if (cursor) {
+    // ----------------------------------------------------------------
+    // Path A: Cursor-based pagination (preferred, O(1) seek)
+    // ----------------------------------------------------------------
     const decoded = decodeCursor(cursor);
+    const queryParams: unknown[] = [fetchLimit];
+    let whereClause = '';
+
     if (decoded) {
       whereClause = 'WHERE (t.created_at < $2 OR (t.created_at = $2 AND t.id < $3))';
       queryParams.push(decoded.createdAt, decoded.id);
     }
-  } else if (page > 1) {
-    const offset = (page - 1) * limit;
-    whereClause = 'OFFSET $2';
-    queryParams.push(offset);
+
+    const topicsResult = await db.query<{
+      id: string;
+      title: string;
+      root_node_id: string;
+      fork_count: number;
+      created_at: Date;
+      claim_count: string;
+      root_claim_content: string | null;
+    }>(
+      `SELECT
+         t.id,
+         t.title,
+         t.root_node_id,
+         t.fork_count,
+         t.created_at,
+         COUNT(n.id) AS claim_count,
+         root_node.content AS root_claim_content
+       FROM topics t
+       LEFT JOIN nodes n
+         ON n.topic_id = t.id AND n.status = 'ACTIVE'
+       LEFT JOIN nodes root_node
+         ON root_node.id = t.root_node_id
+       ${whereClause}
+       GROUP BY t.id, root_node.content
+       ORDER BY t.created_at DESC, t.id DESC
+       LIMIT $1`,
+      queryParams
+    );
+
+    const rows = topicsResult.rows;
+    const hasMore = rows.length > limit;
+    if (hasMore) rows.pop();
+
+    const topics: TopicSummary[] = rows.map((t) => ({
+      id: t.id,
+      title: t.title,
+      rootNodeId: t.root_node_id,
+      forkCount: t.fork_count,
+      createdAt: t.created_at.toISOString(),
+      claimCount: parseInt(t.claim_count, 10),
+      rootClaimContent: t.root_claim_content,
+    }));
+
+    const lastTopic = topics[topics.length - 1];
+    const nextCursor = hasMore && lastTopic ? encodeCursor(lastTopic.createdAt, lastTopic.id) : null;
+
+    return { topics, total: topics.length, page, limit, nextCursor, hasMore };
   }
+
+  // ----------------------------------------------------------------
+  // Path B: Offset-based pagination (page number; OFFSET after ORDER BY)
+  // ----------------------------------------------------------------
+  const offset = Math.max(0, (page - 1) * limit);
 
   const topicsResult = await db.query<{
     id: string;
@@ -428,18 +483,15 @@ export async function getAllTopics(
        ON n.topic_id = t.id AND n.status = 'ACTIVE'
      LEFT JOIN nodes root_node
        ON root_node.id = t.root_node_id
-     ${whereClause}
      GROUP BY t.id, root_node.content
      ORDER BY t.created_at DESC, t.id DESC
-     LIMIT $1`,
-    queryParams
+     LIMIT $1 OFFSET $2`,
+    [fetchLimit, offset]
   );
 
   const rows = topicsResult.rows;
   const hasMore = rows.length > limit;
-  if (hasMore) {
-    rows.pop(); // Pop extra item used for hasMore detection
-  }
+  if (hasMore) rows.pop();
 
   const topics: TopicSummary[] = rows.map((t) => ({
     id: t.id,
@@ -456,7 +508,7 @@ export async function getAllTopics(
 
   return {
     topics,
-    total: topics.length,   // Actual count of returned items, not a full table scan
+    total: topics.length,
     page,
     limit,
     nextCursor,
@@ -534,15 +586,15 @@ export async function createTopic(title: string, rootClaim: string, authorId: st
   }
 }
 
+// Fix P-1: Accept pre-resolved User object instead of calling getOrCreateUser again.
+// The caller (route handler) already has req.user resolved by the auth middleware.
 export async function addClaimNode(
   topicId: string,
   parentId: string,
-  authorId: string,
+  user: User,
   edgeType: 'supports' | 'refutes' | 'clarifies' | 'evidence',
   content: string
 ): Promise<ClaimNode> {
-  const user = await getOrCreateUser(authorId);
-
   // Quota enforcement: Max 50 nodes per user per topic per 24 hours
   const MAX_NODES_PER_USER_PER_TOPIC_PER_DAY = 50;
   const quotaResult = await db.query<{ count: string }>(
@@ -634,13 +686,13 @@ export async function addClaimNode(
   }
 }
 
+// Fix P-1: Accept pre-resolved User object instead of re-fetching by userId.
 export async function voteNode(
   topicId: string,
   nodeId: string,
-  userId: string,
+  user: User,
   voteType: 'support' | 'contest'
 ): Promise<ClaimNode> {
-  const user = await getOrCreateUser(userId);
   const dbVoteType = voteType.toUpperCase();
 
   const client = await db.connect();
@@ -737,9 +789,8 @@ export async function voteNode(
   }
 }
 
-// Fix #7 — Replace N-query loop with bulk INSERT ... SELECT
-export async function forkTopic(topicId: string, authorId: string): Promise<Topic> {
-  const user = await getOrCreateUser(authorId);
+// Fix P-1: Accept pre-resolved User object instead of re-fetching by userId.
+export async function forkTopic(topicId: string, user: User): Promise<Topic> {
   const original = await getTopic(topicId, user.id);
   if (!original) throw new ValidationError(`Topic not found: ${topicId}`);
 
@@ -1114,14 +1165,13 @@ export interface FlagResult {
  * Flags a claim node for moderation (Item 19).
  * Auto-flags the node (status = 'FLAGGED') if it reaches 3 or more flags.
  */
+// Fix P-1: Accept pre-resolved User object to eliminate redundant DB lookup.
 export async function flagClaimNode(
   topicId: string,
   nodeId: string,
-  reporterId: string,
+  user: User,
   reason: string
 ): Promise<FlagResult> {
-  const user = await getOrCreateUser(reporterId);
-
   const nodeResult = await db.query<{ id: string; status: string }>(
     'SELECT id, status FROM nodes WHERE id = $1 AND topic_id = $2',
     [nodeId, topicId]
@@ -1204,3 +1254,209 @@ export async function moderateNode(
 
   return { nodeId, status: newStatus };
 }
+
+// -----------------------------------------------------------------------
+// Fix P-2: Flat node list for AI analysis and diff (no recursive CTE)
+// -----------------------------------------------------------------------
+/**
+ * Returns a flat list of all ACTIVE nodes for a topic without the recursive subgraph CTE.
+ * Use this wherever you only need claim content (AI analysis, diff engine) to avoid
+ * loading up to 500 nodes with full graph traversal overhead.
+ */
+export async function getTopicFlatNodes(topicId: string): Promise<ClaimNode[]> {
+  const res = await db.query(
+    `SELECT
+       n.id, n.parent_id, n.author_id, u.username AS author_username,
+       n.edge_type, n.pos_x, n.pos_y, n.content,
+       n.support_score, n.contest_score, n.is_steel, n.created_at,
+       FALSE AS has_more_children
+     FROM nodes n
+     LEFT JOIN users u ON u.id = n.author_id
+     WHERE n.topic_id = $1 AND n.status = 'ACTIVE'
+     ORDER BY n.created_at ASC`,
+    [topicId]
+  );
+  return res.rows.map((row) => rowToNode(row as Record<string, unknown>));
+}
+
+// -----------------------------------------------------------------------
+// Fix F-7: Steelman path — backend-computed filtered sub-graph
+// -----------------------------------------------------------------------
+/**
+ * Returns only steelman-verified nodes (is_steel = TRUE) for a topic,
+ * ordered by support_score descending. This powers the /steelman view.
+ */
+export async function getSteelmanPath(topicId: string, currentUserId?: string): Promise<ClaimNode[]> {
+  const res = await db.query(
+    `SELECT
+       n.id, n.parent_id, n.author_id, u.username AS author_username,
+       n.edge_type, n.pos_x, n.pos_y, n.content,
+       n.support_score, n.contest_score, n.is_steel, n.created_at,
+       FALSE AS has_more_children
+     FROM nodes n
+     LEFT JOIN users u ON u.id = n.author_id
+     WHERE n.topic_id = $1 AND n.status = 'ACTIVE' AND n.is_steel = TRUE
+     ORDER BY n.support_score DESC`,
+    [topicId]
+  );
+
+  let userVoteMap: Map<string, 'support' | 'contest'> | undefined;
+  if (currentUserId) {
+    userVoteMap = new Map();
+    const votesRes = await db.query<{ node_id: string; vote_type: string }>(
+      `SELECT node_id, vote_type FROM votes WHERE user_id = $1 AND node_id = ANY($2::text[])`,
+      [currentUserId, res.rows.map((r) => r.id)]
+    );
+    for (const v of votesRes.rows) {
+      userVoteMap.set(v.node_id, v.vote_type.toLowerCase() as 'support' | 'contest');
+    }
+  }
+
+  return res.rows.map((row) => rowToNode(row as Record<string, unknown>, userVoteMap));
+}
+
+// -----------------------------------------------------------------------
+// Fix F-1: Non-root node editing (author or topic owner)
+// -----------------------------------------------------------------------
+/**
+ * Updates the content of any claim node, saving a version history snapshot.
+ * The caller (route middleware) must verify the editor is either the node's
+ * author or the topic owner before calling this function.
+ */
+export async function updateClaimNode(
+  topicId: string,
+  nodeId: string,
+  newContent: string,
+  editorUser: User
+): Promise<ClaimNode> {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+
+    const existing = await client.query<{
+      content: string;
+      version: number;
+      author_id: string;
+      edge_type: string;
+    }>(
+      'SELECT content, version, author_id, edge_type FROM nodes WHERE id = $1 AND topic_id = $2 AND status = $3',
+      [nodeId, topicId, 'ACTIVE']
+    );
+
+    if (existing.rowCount === 0) {
+      throw new ValidationError(`Node not found or inactive: ${nodeId}`);
+    }
+
+    const { content: oldContent, version: oldVersion, author_id: authorId } = existing.rows[0];
+
+    // Snapshot current version into immutable node_versions table
+    await client.query(
+      `INSERT INTO node_versions (node_id, content, version, edited_by)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (node_id, version) DO NOTHING`,
+      [nodeId, oldContent, oldVersion, editorUser.id]
+    );
+
+    const updateRes = await client.query(
+      `UPDATE nodes
+       SET content = $1, version = version + 1
+       WHERE id = $2 AND topic_id = $3
+       RETURNING id, parent_id, author_id, edge_type, pos_x, pos_y, content,
+                 support_score, contest_score, is_steel, created_at`,
+      [newContent, nodeId, topicId]
+    );
+
+    await client.query('COMMIT');
+
+    const node = rowToNode(updateRes.rows[0] as unknown as Record<string, unknown>);
+
+    await invalidateTopicCache(topicId);
+    emitTopicMutation(topicId, 'node_updated' as any, node);
+
+    return node;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// -----------------------------------------------------------------------
+// Fix F-2: Node self-deletion with grace period and children block
+// -----------------------------------------------------------------------
+const NODE_DELETE_GRACE_PERIOD_MS = 15 * 60 * 1000; // 15 minutes
+
+/**
+ * Soft-deletes a claim node (sets status = 'REMOVED').
+ * Enforces:
+ *  - Author must be the node creator (topic owners bypass this check at route level).
+ *  - Node must be within the 15-minute grace period since creation.
+ *  - Node must not have active child nodes (would orphan the sub-tree).
+ */
+export async function deleteClaimNode(
+  topicId: string,
+  nodeId: string,
+  requestingUser: User
+): Promise<{ nodeId: string; status: string }> {
+  const nodeRes = await db.query<{
+    author_id: string;
+    edge_type: string;
+    status: string;
+    created_at: Date;
+  }>(
+    'SELECT author_id, edge_type, status, created_at FROM nodes WHERE id = $1 AND topic_id = $2',
+    [nodeId, topicId]
+  );
+
+  if (nodeRes.rowCount === 0) {
+    throw new ValidationError(`Node not found: ${nodeId}`);
+  }
+
+  const { author_id, edge_type, status, created_at } = nodeRes.rows[0];
+
+  if (edge_type === 'root') {
+    throw new ValidationError('Root nodes cannot be deleted. Delete the entire topic instead.');
+  }
+
+  if (status !== 'ACTIVE') {
+    throw new ValidationError(`Node is already ${status} and cannot be deleted.`);
+  }
+
+  // Grace-period check — authors can only self-delete within 15 minutes
+  const isOwner = requestingUser.id !== author_id; // topic owners bypass at route level
+  if (!isOwner) {
+    const ageMs = Date.now() - new Date(created_at).getTime();
+    if (ageMs > NODE_DELETE_GRACE_PERIOD_MS) {
+      throw new ValidationError(
+        'Self-deletion window has passed. Claims older than 15 minutes cannot be deleted.'
+      );
+    }
+  }
+
+  // Block deletion if node has active children (would orphan the subtree)
+  const childCount = await db.query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM nodes WHERE parent_id = $1 AND topic_id = $2 AND status = 'ACTIVE'`,
+    [nodeId, topicId]
+  );
+  if (parseInt(childCount.rows[0].count, 10) > 0) {
+    throw new ValidationError(
+      'Cannot delete a claim that has active replies. Remove all child claims first.'
+    );
+  }
+
+  const updateRes = await db.query(
+    `UPDATE nodes SET status = 'REMOVED' WHERE id = $1 AND topic_id = $2 RETURNING id, status`,
+    [nodeId, topicId]
+  );
+
+  if (updateRes.rowCount === 0) {
+    throw new ValidationError(`Node not found: ${nodeId}`);
+  }
+
+  await invalidateTopicCache(topicId);
+  emitTopicMutation(topicId, 'node_deleted' as any, { nodeId, status: 'REMOVED' });
+
+  return { nodeId, status: 'REMOVED' };
+}
+

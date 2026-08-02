@@ -37,35 +37,51 @@ export async function getCached<T>(key: string): Promise<T | null> {
 
 /**
  * Sets a JSON object in Redis with a TTL in seconds.
+ * Fix P-3: Optionally associates the key with a topic tag set for O(1) bulk invalidation.
  */
-export async function setCached(key: string, data: unknown, ttlSeconds = 30): Promise<void> {
+export async function setCached(
+  key: string,
+  data: unknown,
+  ttlSeconds = 30,
+  topicId?: string
+): Promise<void> {
   if (!redisClient) return;
   try {
-    await redisClient.setex(key, ttlSeconds, JSON.stringify(data));
+    const pipeline = redisClient.pipeline();
+    pipeline.setex(key, ttlSeconds, JSON.stringify(data));
+    if (topicId) {
+      // Track this key under the topic's tag set so invalidation never needs SCAN
+      const tagKey = `cache-tag:topic:${topicId}`;
+      pipeline.sadd(tagKey, key);
+      // Tag set TTL = cache TTL + 60s buffer so it outlives the cached value
+      pipeline.expire(tagKey, ttlSeconds + 60);
+    }
+    await pipeline.exec();
   } catch (err) {
-    // Ignore cache write errors
+    // Ignore cache write errors — cache is best-effort
   }
 }
 
 /**
- * Invalidates all cached subgraphs for a specific topic ID.
+ * Fix P-3: Invalidates all cached subgraphs for a specific topic ID.
+ * Uses a Redis Set (cache-tag:topic:{topicId}) instead of SCAN to avoid O(keyspace) cost.
  */
 export async function invalidateTopicCache(topicId: string): Promise<void> {
   if (!redisClient) return;
   try {
-    const pattern = `subgraph:${topicId}:*`;
-    let cursor = '0';
-    do {
-      const [nextCursor, keys] = await redisClient.scan(cursor, 'MATCH', pattern, 'COUNT', '100');
-      cursor = nextCursor;
-      if (keys.length > 0) {
-        await redisClient.del(...keys);
-      }
-    } while (cursor !== '0');
+    const tagKey = `cache-tag:topic:${topicId}`;
+    const keys = await redisClient.smembers(tagKey);
+    if (keys.length > 0) {
+      const pipeline = redisClient.pipeline();
+      pipeline.del(...keys);
+      pipeline.del(tagKey); // Remove the tag set itself
+      await pipeline.exec();
+    }
   } catch (err) {
-    // Ignore cache invalidation errors
+    // Ignore cache invalidation errors — stale data will expire naturally
   }
 }
+
 
 /**
  * Publishes a message to a Redis channel for SSE fan-out.

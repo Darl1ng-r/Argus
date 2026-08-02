@@ -12,8 +12,10 @@ export interface ClaimNode {
   steel: boolean;
   userVote?: 'support' | 'contest' | null;
   authorId?: string;
+  authorUsername?: string; // Fix F-8: included in API responses to avoid client-side N+1 user lookups
   createdAt: string;
 }
+
 
 export interface Topic {
   id: string;

@@ -12,6 +12,8 @@ import {
   updateRootClaim,
   compareTopicForks,
   detectCycle,
+  getTopicFlatNodes,
+  getSteelmanPath,
   TopicRole,
 } from '../services/graphService.js';
 import { analyzeArgumentGraph } from '../services/aiService.js';
@@ -160,12 +162,28 @@ router.put(
 );
 
 // ---------------------------------------------------------------------------
+// GET /api/topics/:id/steelman — backend-computed steelman sub-graph (Fix F-7)
+// ---------------------------------------------------------------------------
+router.get('/:id/steelman', async (req: Request, res: Response) => {
+  try {
+    const topicId = validateIdentifier(req.params.id, 'topicId');
+    const currentUserId = req.user?.id;
+    const nodes = await getSteelmanPath(topicId, currentUserId);
+    res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=30');
+    res.json({ topicId, nodes });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/topics/:id/fork — fork a topic
 // ---------------------------------------------------------------------------
 router.post('/:id/fork', requireAuth, mutationLimiter, async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
-    const forked = await forkTopic(topicId, req.user!.id);
+    const forked = await forkTopic(topicId, req.user!);
     res.status(201).json(forked);
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
@@ -191,13 +209,16 @@ router.get('/:id/diff/:compareId', async (req: Request, res: Response) => {
 
 // ---------------------------------------------------------------------------
 // POST /api/topics/:id/ai-analyze — BullMQ async AI argument analysis queue
+// Fix S-2: Added requireAuth + mutationLimiter to prevent unauthenticated Gemini budget drain.
+// Fix P-2: Uses getTopicFlatNodes instead of full subgraph to avoid expensive recursive CTE.
 // ---------------------------------------------------------------------------
-router.post('/:id/ai-analyze', async (req: Request, res: Response) => {
+router.post('/:id/ai-analyze', requireAuth, mutationLimiter, async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
-    const topic = await getTopic(topicId, req.user?.id);
 
-    if (!topic) return res.status(404).json({ error: 'Topic not found' });
+    // P-2: Verify topic exists with a lightweight check before enqueueing
+    const topicCheck = await getTopic(topicId, req.user?.id);
+    if (!topicCheck) return res.status(404).json({ error: 'Topic not found' });
 
     const jobInfo = await enqueueAIAnalysis(topicId, req.user?.id);
     if (jobInfo.status === 'queued') {
@@ -217,8 +238,9 @@ router.post('/:id/ai-analyze', async (req: Request, res: Response) => {
 
 // ---------------------------------------------------------------------------
 // GET /api/topics/:id/ai-analyze/status/:jobId — Check async AI analysis status
+// Fix S-2: Requires auth to prevent job ID enumeration by anonymous users.
 // ---------------------------------------------------------------------------
-router.get('/:id/ai-analyze/status/:jobId', async (req: Request, res: Response) => {
+router.get('/:id/ai-analyze/status/:jobId', requireAuth, async (req: Request, res: Response) => {
   try {
     const jobId = validateIdentifier(req.params.jobId, 'jobId');
     const status = await getAIJobStatus(jobId);

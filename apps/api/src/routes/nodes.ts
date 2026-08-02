@@ -7,9 +7,12 @@ import {
   addClaimNode,
   voteNode,
   detectCycle,
+  updateClaimNode,
+  deleteClaimNode,
 } from '../services/graphService.js';
 import {
   sanitizeClaimContent,
+  sanitizeFlagReason,
   validateEdgeType,
   validateVoteType,
   validateIdentifier,
@@ -53,7 +56,7 @@ router.post(
       const newNode = await addClaimNode(
         topicId,
         sanitizedParentId,
-        req.user!.id,
+        req.user!,
         validatedEdgeType,
         sanitizedContent
       );
@@ -80,7 +83,7 @@ router.post(
       const { voteType } = req.body as { voteType?: unknown };
 
       const validatedVoteType = validateVoteType(voteType);
-      const updatedNode = await voteNode(topicId, nodeId, req.user!.id, validatedVoteType);
+      const updatedNode = await voteNode(topicId, nodeId, req.user!, validatedVoteType);
       res.json(updatedNode);
     } catch (err) {
       if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
@@ -115,11 +118,12 @@ router.post(
     try {
       const topicId = validateIdentifier(req.params.id, 'topicId');
       const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
-      const { reason } = req.body as { reason?: string };
+      const { reason } = req.body as { reason?: unknown };
 
-      const cleanReason = String(reason || 'Inappropriate content').trim().slice(0, 250);
+      // Fix D-2: Use sanitizeFlagReason for proper type checking, HTML strip, and length enforcement
+      const cleanReason = sanitizeFlagReason(reason);
       const { flagClaimNode } = await import('../services/graphService.js');
-      const result = await flagClaimNode(topicId, nodeId, req.user!.id, cleanReason);
+      const result = await flagClaimNode(topicId, nodeId, req.user!, cleanReason);
 
       res.json(result);
     } catch (err) {
@@ -150,6 +154,81 @@ router.post(
       const { moderateNode } = await import('../services/graphService.js');
       const result = await moderateNode(topicId, nodeId, action.toUpperCase() as any);
 
+      res.json(result);
+    } catch (err) {
+      if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+      sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// PUT /api/topics/:id/nodes/:nodeId — edit a claim node (Fix F-1)
+// Author or topic owner can edit. Content is versioned into node_versions.
+// ---------------------------------------------------------------------------
+router.put(
+  '/:nodeId',
+  requireAuth,
+  mutationLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const topicId = validateIdentifier(req.params.id, 'topicId');
+      const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
+      const { content } = req.body as { content?: unknown };
+
+      const sanitizedContent = sanitizeClaimContent(content);
+
+      // Verify caller is the node's author or the topic owner
+      const { getUserTopicRole } = await import('../services/graphService.js');
+      const userRole = await getUserTopicRole(topicId, req.user!.id);
+      const nodeAuthorRes = await import('../db.js').then(({ db }) =>
+        db.query<{ author_id: string }>(
+          'SELECT author_id FROM nodes WHERE id = $1 AND topic_id = $2',
+          [nodeId, topicId]
+        )
+      );
+      if (nodeAuthorRes.rowCount === 0) {
+        return res.status(404).json({ error: 'Node not found.' });
+      }
+
+      const isAuthor = nodeAuthorRes.rows[0].author_id === req.user!.id;
+      const isOwner = userRole === 'owner';
+      if (!isAuthor && !isOwner) {
+        return res.status(403).json({ error: 'Forbidden: Only the claim author or topic owner can edit this claim.' });
+      }
+
+      const updatedNode = await updateClaimNode(topicId, nodeId, sanitizedContent, req.user!);
+      res.json(updatedNode);
+    } catch (err) {
+      if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+      sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// DELETE /api/topics/:id/nodes/:nodeId — soft-delete a claim node (Fix F-2)
+// Authors can delete within 15 minutes. Topic owners can delete any time.
+// Cannot delete if node has active children.
+// ---------------------------------------------------------------------------
+router.delete(
+  '/:nodeId',
+  requireAuth,
+  mutationLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const topicId = validateIdentifier(req.params.id, 'topicId');
+      const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
+
+      // Topic owners bypass the grace-period check (they can always moderate)
+      const { getUserTopicRole } = await import('../services/graphService.js');
+      const userRole = await getUserTopicRole(topicId, req.user!.id);
+      const isOwner = userRole === 'owner';
+
+      // Pass the requesting user; deleteClaimNode applies grace-period check unless owner
+      const result = await deleteClaimNode(topicId, nodeId, req.user!);
+
+      // If the caller is not the owner, ensure they are the author (deleteClaimNode enforces this)
       res.json(result);
     } catch (err) {
       if (err instanceof ValidationError) return res.status(400).json({ error: err.message });

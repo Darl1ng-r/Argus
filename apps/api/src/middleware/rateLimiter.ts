@@ -7,7 +7,10 @@ import { RedisStore } from 'rate-limit-redis';
 import { redisClient } from '../redis.js';
 
 function makeStore() {
-  if (redisClient && process.env.NODE_ENV !== 'test' && redisClient.status === 'ready') {
+  if (redisClient && process.env.NODE_ENV !== 'test') {
+    // Fix P-7: Removed `redisClient.status === 'ready'` guard — with lazyConnect: true,
+    // the status is always 'wait' at import time, so the store was never created.
+    // ioredis will queue commands until the connection is established.
     return new RedisStore({
       // @ts-expect-error — ioredis satisfies the interface
       sendCommand: (...args: string[]) => redisClient!.call(...args),

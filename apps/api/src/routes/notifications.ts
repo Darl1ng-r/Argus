@@ -8,6 +8,7 @@ import {
   markNotificationsAsRead,
 } from '../services/notificationService.js';
 import { requireAuth, sendError } from '../middleware/index.js';
+import { validateIdentifier, ValidationError } from '../utils/sanitizer.js';
 
 // ---------------------------------------------------------------------------
 // Shared Redis multiplexer for notification SSE — one subscriber per userId
@@ -99,8 +100,22 @@ router.get('/unread-count', async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 router.post('/mark-read', async (req: Request, res: Response) => {
   try {
-    const { notificationIds } = req.body as { notificationIds?: string[] };
-    const updatedCount = await markNotificationsAsRead(req.user!.id, notificationIds);
+    const { notificationIds } = req.body as { notificationIds?: unknown[] };
+
+    // Fix S-7: Validate each notification ID and cap array size to prevent SQL injection
+    const MAX_IDS = 100;
+    let validatedIds: string[] | undefined;
+    if (Array.isArray(notificationIds) && notificationIds.length > 0) {
+      if (notificationIds.length > MAX_IDS) {
+        return res.status(400).json({
+          error: `notificationIds must not contain more than ${MAX_IDS} entries.`,
+        });
+      }
+      const { validateIdentifier } = await import('../utils/sanitizer.js');
+      validatedIds = notificationIds.map((id, i) => validateIdentifier(id, `notificationIds[${i}]`));
+    }
+
+    const updatedCount = await markNotificationsAsRead(req.user!.id, validatedIds);
     res.json({ success: true, updatedCount });
   } catch (err) {
     sendError(res, 500, err instanceof Error ? err.message : 'Failed to mark notifications as read', err);

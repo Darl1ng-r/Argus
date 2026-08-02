@@ -103,17 +103,54 @@ export function validateVoteType(raw: unknown): 'support' | 'contest' {
 
 /**
  * Validates UUID / ID parameter string.
+ * Fix S-6: Added MAX_IDENTIFIER_LEN cap (128 chars) to prevent DoS via oversized ID strings.
  */
+const MAX_IDENTIFIER_LEN = 128;
+
 export function validateIdentifier(raw: unknown, paramName: string): string {
   if (typeof raw !== 'string' || !raw.trim()) {
     throw new ValidationError(`Invalid ${paramName}: must be a non-empty string identifier.`);
   }
 
   const cleaned = raw.trim();
+
+  if (cleaned.length > MAX_IDENTIFIER_LEN) {
+    throw new ValidationError(
+      `Invalid ${paramName}: identifier must not exceed ${MAX_IDENTIFIER_LEN} characters.`
+    );
+  }
+
   // Prevent path traversal or command injection in ID parameters
   if (!/^[a-zA-Z0-9_-]+$/.test(cleaned)) {
     throw new ValidationError(`Invalid ${paramName} format.`);
   }
 
   return cleaned;
+}
+
+/**
+ * Sanitizes and validates a moderation flag reason.
+ * Fix D-2: Enforces type checking, HTML strip, and length constraints on flag reasons.
+ */
+export function sanitizeFlagReason(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    // Coerce non-string to default reason rather than throw, preserving UX
+    return 'Inappropriate content';
+  }
+
+  const trimmed = raw.trim();
+  if (!trimmed) return 'Inappropriate content';
+
+  const sanitized = DOMPurify.sanitize(trimmed, {
+    ALLOWED_TAGS: [],
+    ALLOWED_ATTR: [],
+  });
+
+  if (sanitized.length > 250) {
+    throw new ValidationError(
+      `Flag reason exceeds maximum limit of 250 characters (received ${sanitized.length} characters).`
+    );
+  }
+
+  return sanitized || 'Inappropriate content';
 }
