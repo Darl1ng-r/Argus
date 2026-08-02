@@ -1,6 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.db = void 0;
+exports.setSessionUser = setSessionUser;
+exports.withUserSession = withUserSession;
 exports.testConnection = testConnection;
 require("dotenv/config");
 const pg_1 = require("pg");
@@ -22,17 +24,61 @@ const pool = new pg_1.Pool({
         : false,
 });
 pool.on('error', (err) => {
-    console.error('[DB] Unexpected idle client error', err);
+    // Import logger lazily to avoid circular dep — db.ts is imported by server.ts before logger is assigned
+    process.stderr.write(`[DB] Unexpected idle client error: ${err.message}\n`);
 });
 pool.on('connect', () => {
     // Optional: log pool connects in debug mode
 });
 exports.db = pool;
+/**
+ * Sets active user session context for PostgreSQL Row-Level Security (RLS) evaluation.
+ * NOTE: Must be called on a dedicated PoolClient (not a shared pool query) because
+ * SET LOCAL is scoped to the current transaction/session.
+ */
+async function setSessionUser(client, userId) {
+    if (userId) {
+        await client.query(`SET LOCAL app.current_user_id = $1`, [userId]);
+    }
+}
+/**
+ * Fix 2 — RLS enforcement helper.
+ *
+ * Acquires a dedicated client, sets `app.current_user_id` in a transaction so
+ * PostgreSQL RLS policies can evaluate `current_setting('app.current_user_id')`
+ * correctly, runs the callback, then releases the client.
+ *
+ * Use this wherever a route or service performs queries against tables that have
+ * Row-Level Security policies gated on the calling user's identity.
+ *
+ * @example
+ *   const result = await withUserSession(userId, async (client) => {
+ *     return client.query('SELECT * FROM notifications WHERE user_id = $1', [userId]);
+ *   });
+ */
+async function withUserSession(userId, fn) {
+    const client = await pool.connect();
+    try {
+        // Use a transaction so SET LOCAL is scoped correctly and released on COMMIT/ROLLBACK
+        await client.query('BEGIN');
+        await client.query('SET LOCAL app.current_user_id = $1', [userId]);
+        const result = await fn(client);
+        await client.query('COMMIT');
+        return result;
+    }
+    catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    }
+    finally {
+        client.release();
+    }
+}
 async function testConnection() {
     const client = await pool.connect();
     try {
         await client.query('SELECT 1');
-        console.log('[DB] Connected to PostgreSQL ✓');
+        process.stdout.write('[DB] Connected to PostgreSQL ✓\n');
     }
     finally {
         client.release();

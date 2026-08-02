@@ -21,7 +21,7 @@ ENV PORT=4000
 
 # Install runtime dependencies only
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 # Copy compiled JavaScript output
 COPY --from=builder /app/dist ./dist
