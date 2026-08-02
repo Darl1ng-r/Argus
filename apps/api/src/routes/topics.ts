@@ -250,5 +250,25 @@ router.get('/:id/ai-analyze/status/:jobId', requireAuth, async (req: Request, re
     sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
   }
 });
+// ---------------------------------------------------------------------------
+// DELETE /api/topics/:id — delete a topic (F-6, owner only)
+// ---------------------------------------------------------------------------
+router.delete(
+  '/:id',
+  requireAuth,
+  requireTopicRole('owner'),
+  mutationLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const topicId = validateIdentifier(req.params.id, 'topicId');
+      const { deleteTopic } = await import('../services/graphService.js');
+      const result = await deleteTopic(topicId);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+      sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+    }
+  }
+);
 
 export default router;

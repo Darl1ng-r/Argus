@@ -9,7 +9,8 @@
     "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
     "build:api": "npm --prefix apps/api run build",
     "build:web": "npm --prefix apps/web run build",
-    "build": "npm run build:api && npm run build:web"
+    "build": "npm run build:api && npm run build:web",
+    "test": "npm --prefix apps/api run test"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

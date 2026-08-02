@@ -49,6 +49,10 @@ export async function voteNode(
             'UPDATE nodes SET support_score = GREATEST(0, support_score - 1) WHERE id = $1',
             [nodeId]
           );
+          await client.query(
+            'UPDATE users SET reputation = GREATEST(0, reputation - 10) WHERE id = $1',
+            [nodeAuthorId]
+          );
         } else {
           await client.query(
             'UPDATE nodes SET contest_score = GREATEST(0, contest_score - 1) WHERE id = $1',
@@ -71,6 +75,10 @@ export async function voteNode(
              WHERE id = $1`,
             [nodeId]
           );
+          await client.query(
+            'UPDATE users SET reputation = reputation + 10 WHERE id = $1',
+            [nodeAuthorId]
+          );
         } else {
           await client.query(
             `UPDATE nodes SET
@@ -78,6 +86,10 @@ export async function voteNode(
                support_score = GREATEST(0, support_score - 1)
              WHERE id = $1`,
             [nodeId]
+          );
+          await client.query(
+            'UPDATE users SET reputation = GREATEST(0, reputation - 10) WHERE id = $1',
+            [nodeAuthorId]
           );
         }
       }
@@ -92,6 +104,10 @@ export async function voteNode(
           'UPDATE nodes SET support_score = support_score + 1 WHERE id = $1',
           [nodeId]
         );
+        await client.query(
+          'UPDATE users SET reputation = reputation + 10 WHERE id = $1',
+          [nodeAuthorId]
+        );
       } else {
         await client.query(
           'UPDATE nodes SET contest_score = contest_score + 1 WHERE id = $1',
@@ -104,6 +120,7 @@ export async function voteNode(
       id: string;
       parent_id: string | null;
       author_id: string;
+      author_username: string | null;
       edge_type: string;
       pos_x: number;
       pos_y: number;
@@ -113,9 +130,12 @@ export async function voteNode(
       is_steel: boolean;
       created_at: Date;
     }>(
-      `SELECT id, parent_id, author_id, edge_type, pos_x, pos_y, content,
-              support_score, contest_score, is_steel, created_at
-       FROM nodes WHERE id = $1`,
+      `SELECT n.id, n.parent_id, n.author_id, u.username AS author_username,
+              n.edge_type, n.pos_x, n.pos_y, n.content,
+              n.support_score, n.contest_score, n.is_steel, n.created_at
+       FROM nodes n
+       LEFT JOIN users u ON u.id = n.author_id
+       WHERE n.id = $1`,
       [nodeId]
     );
 

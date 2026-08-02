@@ -93,6 +93,23 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
+// GET /api/topics/:id/nodes/:nodeId — fetch single node (F-1)
+// ---------------------------------------------------------------------------
+router.get('/:nodeId', async (req: Request, res: Response) => {
+  try {
+    const topicId = validateIdentifier(req.params.id, 'topicId');
+    const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
+    const { getNodeById } = await import('../services/graphService.js');
+    const node = await getNodeById(topicId, nodeId, req.user?.id);
+    if (!node) return res.status(404).json({ error: 'Node not found' });
+    res.json(node);
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/topics/:id/nodes/:nodeId/history — immutable edit history (Item 13)
 // ---------------------------------------------------------------------------
 router.get('/:nodeId/history', async (req: Request, res: Response) => {
@@ -106,6 +123,29 @@ router.get('/:nodeId/history', async (req: Request, res: Response) => {
     sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
   }
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/topics/:id/nodes/:nodeId/steelman — toggle steelman status (F-4, owner only)
+// ---------------------------------------------------------------------------
+router.post(
+  '/:nodeId/steelman',
+  requireAuth,
+  requireTopicRole('owner'),
+  mutationLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const topicId = validateIdentifier(req.params.id, 'topicId');
+      const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
+      const { isSteel } = req.body as { isSteel?: boolean };
+      const { toggleSteelmanNode } = await import('../services/graphService.js');
+      const updatedNode = await toggleSteelmanNode(topicId, nodeId, Boolean(isSteel));
+      res.json(updatedNode);
+    } catch (err) {
+      if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+      sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
+    }
+  }
+);
 
 // ---------------------------------------------------------------------------
 // POST /api/topics/:id/nodes/:nodeId/flag — flag a claim node for moderation (Item 19)
@@ -220,15 +260,13 @@ router.delete(
       const topicId = validateIdentifier(req.params.id, 'topicId');
       const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
 
-      // Topic owners bypass the grace-period check (they can always moderate)
+      // Topic owners can delete any node at any time (bypass grace-period).
+      // Regular contributors can only delete their own claims within 15 minutes.
       const { getUserTopicRole } = await import('../services/graphService.js');
       const userRole = await getUserTopicRole(topicId, req.user!.id);
-      const isOwner = userRole === 'owner';
+      const isTopicOwner = userRole === 'owner';
 
-      // Pass the requesting user; deleteClaimNode applies grace-period check unless owner
-      const result = await deleteClaimNode(topicId, nodeId, req.user!);
-
-      // If the caller is not the owner, ensure they are the author (deleteClaimNode enforces this)
+      const result = await deleteClaimNode(topicId, nodeId, req.user!, isTopicOwner);
       res.json(result);
     } catch (err) {
       if (err instanceof ValidationError) return res.status(400).json({ error: err.message });

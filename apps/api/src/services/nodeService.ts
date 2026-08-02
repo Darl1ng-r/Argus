@@ -204,7 +204,7 @@ export async function updateClaimNode(
     const node = rowToNode(updateRes.rows[0] as unknown as Record<string, unknown>);
 
     await invalidateTopicCache(topicId);
-    emitTopicMutation(topicId, 'node_updated' as any, node);
+    emitTopicMutation(topicId, 'node_updated', node);
 
     return node;
   } catch (err) {
@@ -220,7 +220,8 @@ const NODE_DELETE_GRACE_PERIOD_MS = 15 * 60 * 1000;
 export async function deleteClaimNode(
   topicId: string,
   nodeId: string,
-  requestingUser: User
+  requestingUser: User,
+  byTopicOwner = false
 ): Promise<{ nodeId: string; status: string }> {
   const nodeRes = await db.query<{
     author_id: string;
@@ -246,13 +247,21 @@ export async function deleteClaimNode(
     throw new ValidationError(`Node is already ${status} and cannot be deleted.`);
   }
 
-  const isOwner = requestingUser.id !== author_id;
-  if (!isOwner) {
-    const ageMs = Date.now() - new Date(created_at).getTime();
-    if (ageMs > NODE_DELETE_GRACE_PERIOD_MS) {
-      throw new ValidationError(
-        'Self-deletion window has passed. Claims older than 15 minutes cannot be deleted.'
-      );
+  if (!byTopicOwner) {
+    // isAuthor = the requesting user IS the node's author (fix: was incorrectly inverted)
+    const isAuthor = requestingUser.id === author_id;
+    if (isAuthor) {
+      // Authors can only delete within the 15-minute grace period
+      const ageMs = Date.now() - new Date(created_at).getTime();
+      if (ageMs > NODE_DELETE_GRACE_PERIOD_MS) {
+        throw new ValidationError(
+          'Self-deletion window has passed. Claims older than 15 minutes cannot be deleted.'
+        );
+      }
+    } else {
+      // Non-authors cannot delete nodes they didn't write
+      // (topic owners bypass this via requireTopicRole check at the route level)
+      throw new ValidationError('Forbidden: you can only delete your own claims.');
     }
   }
 
@@ -276,7 +285,7 @@ export async function deleteClaimNode(
   }
 
   await invalidateTopicCache(topicId);
-  emitTopicMutation(topicId, 'node_deleted' as any, { nodeId, status: 'REMOVED' });
+  emitTopicMutation(topicId, 'node_deleted', { nodeId, status: 'REMOVED' });
 
   return { nodeId, status: 'REMOVED' };
 }
@@ -305,5 +314,49 @@ export async function getNodeVersionHistory(nodeId: string): Promise<import('./g
     editedBy: r.edited_by,
     createdAt: r.created_at.toISOString(),
   }));
+}
+
+export async function getNodeById(topicId: string, nodeId: string, currentUserId?: string): Promise<ClaimNode | null> {
+  const res = await db.query(
+    `SELECT n.id, n.parent_id, n.author_id, u.username AS author_username,
+            n.edge_type, n.pos_x, n.pos_y, n.content,
+            n.support_score, n.contest_score, n.is_steel, n.created_at
+     FROM nodes n
+     LEFT JOIN users u ON u.id = n.author_id
+     WHERE n.id = $1 AND n.topic_id = $2 AND n.status = 'ACTIVE'`,
+    [nodeId, topicId]
+  );
+  if (res.rowCount === 0) return null;
+
+  let userVoteMap: Map<string, 'support' | 'contest'> | undefined;
+  if (currentUserId) {
+    userVoteMap = new Map();
+    const voteRes = await db.query<{ vote_type: string }>(
+      'SELECT vote_type FROM votes WHERE node_id = $1 AND user_id = $2',
+      [nodeId, currentUserId]
+    );
+    if (voteRes.rowCount! > 0) {
+      userVoteMap.set(nodeId, voteRes.rows[0].vote_type.toLowerCase() as 'support' | 'contest');
+    }
+  }
+
+  return rowToNode(res.rows[0] as Record<string, unknown>, userVoteMap);
+}
+
+export async function toggleSteelmanNode(topicId: string, nodeId: string, isSteel: boolean): Promise<ClaimNode> {
+  const res = await db.query(
+    `UPDATE nodes
+     SET is_steel = $1
+     WHERE id = $2 AND topic_id = $3 AND status = 'ACTIVE'
+     RETURNING id, parent_id, author_id, edge_type, pos_x, pos_y, content,
+               support_score, contest_score, is_steel, created_at`,
+    [isSteel, nodeId, topicId]
+  );
+  if (res.rowCount === 0) throw new ValidationError(`Node not found or inactive: ${nodeId}`);
+
+  const node = rowToNode(res.rows[0] as Record<string, unknown>);
+  await invalidateTopicCache(topicId);
+  emitTopicMutation(topicId, 'node_steelman_toggled', node);
+  return node;
 }
 

@@ -86,4 +86,23 @@ describe('New Improvements & Security Fixes Tests', () => {
       }
     });
   });
+
+  describe('Wave 2: New Endpoints & Delete Permissions', () => {
+    it('GET /api/topics/:id/nodes/:nodeId returns 404 or 500 without DB mock', async () => {
+      const res = await request(app).get('/api/topics/topic-123/nodes/node-456');
+      expect([404, 500]).toContain(res.status);
+    });
+
+    it('POST /api/topics/:id/nodes/:nodeId/steelman requires authentication', async () => {
+      const res = await request(app)
+        .post('/api/topics/topic-123/nodes/node-456/steelman')
+        .send({ isSteel: true });
+      expect([401, 500]).toContain(res.status);
+    });
+
+    it('DELETE /api/topics/:id requires authentication', async () => {
+      const res = await request(app).delete('/api/topics/topic-123');
+      expect([401, 500]).toContain(res.status);
+    });
+  });
 });

@@ -9,8 +9,16 @@ export const topicEvents = new TopicEventEmitter();
 topicEvents.setMaxListeners(0); // Unlimited — managed per-topic in SSE handler
 
 export interface TopicMutationEvent {
-  // Fix 7: added 'ai_analysis_completed' to remove the `as any` cast in aiQueueService.ts
-  type: 'node_added' | 'node_voted' | 'root_updated' | 'ai_analysis_completed';
+  // All mutation event types — keep in sync with SSE client event listeners
+  type:
+    | 'node_added'
+    | 'node_voted'
+    | 'node_updated'
+    | 'node_deleted'
+    | 'node_steelman_toggled'
+    | 'root_updated'
+    | 'ai_analysis_completed'
+    | 'topic_deleted';
   topicId: string;
   payload: unknown;
   timestamp: string;

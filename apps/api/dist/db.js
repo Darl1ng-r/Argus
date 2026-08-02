@@ -74,13 +74,28 @@ async function withUserSession(userId, fn) {
         client.release();
     }
 }
-async function testConnection() {
-    const client = await pool.connect();
-    try {
-        await client.query('SELECT 1');
-        process.stdout.write('[DB] Connected to PostgreSQL ✓\n');
-    }
-    finally {
-        client.release();
+async function testConnection(maxRetries = 5, initialDelayMs = 1000) {
+    let delay = initialDelayMs;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const client = await pool.connect();
+            try {
+                await client.query('SELECT 1');
+                process.stdout.write('[DB] Connected to PostgreSQL ✓\n');
+                return;
+            }
+            finally {
+                client.release();
+            }
+        }
+        catch (err) {
+            if (attempt === maxRetries) {
+                process.stderr.write(`[DB] Connection failed after ${maxRetries} attempts: ${err instanceof Error ? err.message : String(err)}\n`);
+                throw err;
+            }
+            process.stdout.write(`[DB] Connection attempt ${attempt}/${maxRetries} failed. Retrying in ${delay}ms...\n`);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            delay *= 2;
+        }
     }
 }

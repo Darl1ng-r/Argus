@@ -440,8 +440,19 @@ export async function updateRootClaim(topicId: string, newContent: string): Prom
 }
 
 export async function forkTopic(topicId: string, user: User): Promise<Topic> {
-  const original = await getTopic(topicId, user.id);
-  if (!original) throw new ValidationError(`Topic not found: ${topicId}`);
+  // P-1: Lightweight lookup — avoid full recursive CTE just to check existence and get metadata
+  const originalMeta = await db.query<{
+    id: string;
+    title: string;
+    root_node_id: string;
+    fork_count: number;
+    forked_from_id: string | null;
+    author_id: string;
+    created_at: Date;
+  }>('SELECT id, title, root_node_id, fork_count, forked_from_id, author_id, created_at FROM topics WHERE id = $1', [topicId]);
+
+  if (originalMeta.rowCount === 0) throw new ValidationError(`Topic not found: ${topicId}`);
+  const original = originalMeta.rows[0];
 
   const client = await db.connect();
   try {
@@ -472,7 +483,7 @@ export async function forkTopic(topicId: string, user: User): Promise<Topic> {
 
     await client.query(
       `UPDATE topics SET root_node_id = $1 WHERE id = $2`,
-      [original.rootNodeId, newTopicId]
+      [original.root_node_id, newTopicId]
     );
 
     await client.query(
@@ -486,9 +497,10 @@ export async function forkTopic(topicId: string, user: User): Promise<Topic> {
 
     const newNodes = await getTopicSubgraph(newTopicId, user.id);
 
-    if (original.nodes.length > 0 && original.nodes[0].authorId !== user.id) {
+    // Notify original author if they are not the one forking
+    if (original.author_id !== user.id) {
       createNotification(
-        original.nodes[0].authorId,
+        original.author_id,
         user.id,
         'TOPIC_FORKED',
         newTopicId,
@@ -500,7 +512,7 @@ export async function forkTopic(topicId: string, user: User): Promise<Topic> {
     return {
       id: newTopicId,
       title: original.title,
-      rootNodeId: original.rootNodeId,
+      rootNodeId: original.root_node_id,
       forkCount: 0,
       forkedFromId: topicId,
       createdAt: newCreatedAt.toISOString(),
@@ -512,4 +524,12 @@ export async function forkTopic(topicId: string, user: User): Promise<Topic> {
   } finally {
     client.release();
   }
+}
+
+export async function deleteTopic(topicId: string): Promise<{ topicId: string; status: string }> {
+  const res = await db.query('DELETE FROM topics WHERE id = $1 RETURNING id', [topicId]);
+  if (res.rowCount === 0) throw new ValidationError(`Topic not found: ${topicId}`);
+  await invalidateTopicCache(topicId);
+  emitTopicMutation(topicId, 'topic_deleted', { topicId });
+  return { topicId, status: 'DELETED' };
 }
