@@ -208,9 +208,8 @@ export async function getTopic(topicId: string, currentUserId?: string): Promise
     title: string;
     root_node_id: string;
     fork_count: number;
-    forked_from_id: string | null;
     created_at: Date;
-  }>('SELECT id, title, root_node_id, fork_count, forked_from_id, created_at FROM topics WHERE id = $1', [
+  }>('SELECT id, title, root_node_id, fork_count, created_at FROM topics WHERE id = $1', [
     topicId,
   ]);
 
@@ -224,7 +223,6 @@ export async function getTopic(topicId: string, currentUserId?: string): Promise
     title: topicRow.title,
     rootNodeId: topicRow.root_node_id,
     forkCount: topicRow.fork_count,
-    forkedFromId: topicRow.forked_from_id,
     createdAt: topicRow.created_at.toISOString(),
     nodes,
   };
@@ -254,7 +252,7 @@ export async function getTopicSubgraph(
       rootAnchorClause = 'WHERE n.id = $2 AND n.topic_id = $1 AND n.status = $3';
       queryParams = [topicId, fromNodeId, 'ACTIVE', MAX_RECURSION_DEPTH, MAX_PER_NODE_LIMIT, CTE_ROW_CAP];
     } else {
-      rootAnchorClause = 'WHERE n.parent_id IS NULL AND n.topic_id = $1 AND n.status = $3';
+      rootAnchorClause = 'WHERE n.parent_id IS NULL AND n.topic_id = $1 AND n.status = $2';
       queryParams = [topicId, 'ACTIVE', MAX_RECURSION_DEPTH, MAX_PER_NODE_LIMIT, CTE_ROW_CAP];
     }
 
@@ -268,7 +266,7 @@ export async function getTopicSubgraph(
            n.id, n.parent_id, n.author_id, u.username AS author_username,
            n.edge_type, n.pos_x, n.pos_y, n.content,
            n.support_score, n.contest_score, n.is_steel, n.created_at,
-           1 AS depth, 1 AS child_ordinal
+           1 AS depth, 1::bigint AS child_ordinal
          FROM nodes n
          LEFT JOIN users u ON u.id = n.author_id
          ${rootAnchorClause}

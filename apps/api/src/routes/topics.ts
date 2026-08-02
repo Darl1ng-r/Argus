@@ -60,7 +60,7 @@ router.get('/:id', async (req: Request, res: Response) => {
       : undefined;
 
     const currentUserId = req.user?.id;
-    const topic = await getTopicSubgraph(topicId, fromNodeId, Math.min(depth, 10), currentUserId);
+    const topic = await getTopic(topicId, currentUserId);
     if (!topic) return res.status(404).json({ error: 'Topic not found' });
 
     res.set('Cache-Control', 'public, max-age=10, stale-while-revalidate=20');
@@ -81,7 +81,7 @@ router.get('/:id/subgraph', async (req: Request, res: Response) => {
     const depth = req.query.depth ? parseInt(String(req.query.depth), 10) : 2;
 
     const currentUserId = req.user?.id;
-    const subgraph = await getTopicSubgraph(topicId, fromNodeId, Math.min(depth, 5), currentUserId);
+    const subgraph = await getTopicSubgraph(topicId, currentUserId, Math.min(depth, 5), fromNodeId);
     if (!subgraph) return res.status(404).json({ error: 'Topic or node not found' });
 
     res.set('Cache-Control', 'public, max-age=5, stale-while-revalidate=10');

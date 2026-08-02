@@ -81,7 +81,7 @@ export const Header: React.FC<HeaderProps> = ({
               gap: '4px'
             }}
           >
-            🔍 Search <span style={{ fontSize: '10px', opacity: 0.7 }}>Ctrl+F</span>
+            Search <span style={{ fontSize: '10px', opacity: 0.7 }}>Ctrl+F</span>
           </button>
         )}
 
@@ -104,7 +104,7 @@ export const Header: React.FC<HeaderProps> = ({
               gap: '6px'
             }}
           >
-            ✨ AI Analysis
+            AI Analysis
           </button>
         )}
 
@@ -127,7 +127,7 @@ export const Header: React.FC<HeaderProps> = ({
                 gap: '4px'
               }}
             >
-              📥 Export ▾
+              Export ▾
             </button>
 
             {isExportOpen && (
@@ -153,7 +153,7 @@ export const Header: React.FC<HeaderProps> = ({
                   }}
                   style={{ padding: '10px 14px', fontSize: '13px', fontFamily: 'Inter, sans-serif', cursor: 'pointer', borderBottom: '1px solid var(--marble-line)' }}
                 >
-                  🖼️ PNG Image (High-Res)
+                  PNG Image (High-Res)
                 </div>
                 <div
                   onClick={() => {
@@ -162,7 +162,7 @@ export const Header: React.FC<HeaderProps> = ({
                   }}
                   style={{ padding: '10px 14px', fontSize: '13px', fontFamily: 'Inter, sans-serif', cursor: 'pointer', borderBottom: '1px solid var(--marble-line)' }}
                 >
-                  📐 SVG Vector Image
+                  SVG Vector Image
                 </div>
                 <div
                   onClick={() => {
@@ -171,7 +171,7 @@ export const Header: React.FC<HeaderProps> = ({
                   }}
                   style={{ padding: '10px 14px', fontSize: '13px', fontFamily: 'Inter, sans-serif', cursor: 'pointer' }}
                 >
-                  📝 Markdown Outline (.md)
+                  Markdown Outline (.md)
                 </div>
               </div>
             )}

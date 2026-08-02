@@ -115,11 +115,12 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         {
           selector: 'edge',
           style: {
-            width: 2,
-            'curve-style': 'bezier',
+            width: 2.5,
+            'curve-style': 'straight',
             'target-arrow-shape': 'triangle',
             'arrow-scale': 1.2,
-            opacity: 0.8,
+            opacity: 0.9,
+            'z-index': 1,
           },
         },
         {
@@ -220,7 +221,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
       const desiredNodes = new Map<string, cytoscape.ElementDefinition>();
       const desiredEdges = new Map<string, cytoscape.ElementDefinition>();
 
-      nodes.forEach((n) => {
+      (nodes || []).forEach((n) => {
         desiredNodes.set(n.id, {
           data: {
             id: n.id,
@@ -273,7 +274,9 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
       });
 
       desiredEdges.forEach((def, id) => {
-        if (cy.getElementById(id).length === 0) {
+        const sourceExists = cy.getElementById(def.data.source).length > 0;
+        const targetExists = cy.getElementById(def.data.target).length > 0;
+        if (sourceExists && targetExists && cy.getElementById(id).length === 0) {
           cy.add({ group: 'edges', ...def });
         }
       });

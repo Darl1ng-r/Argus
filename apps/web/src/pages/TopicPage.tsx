@@ -424,10 +424,10 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     );
   }
 
-  const selectedNode = topic?.nodes.find((n) => n.id === selectedId) || null;
+  const selectedNode = topic?.nodes?.find((n) => n.id === selectedId) || null;
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Top Bar */}
       <div style={{ background: 'var(--marble-panel)', padding: '6px 28px', borderBottom: '1px solid var(--marble-line)', display: 'flex', alignItems: 'center' }}>
         <button

@@ -12,7 +12,7 @@ export const MinimapControl: React.FC<MinimapControlProps> = ({
   selectedId,
   onSelectNode,
 }) => {
-  if (nodes.length === 0) return null;
+  if (!nodes || !Array.isArray(nodes) || nodes.length === 0) return null;
 
   // Calculate bounding box of all nodes
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
