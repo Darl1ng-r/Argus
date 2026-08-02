@@ -12,6 +12,7 @@ interface HeaderProps {
   onOpenSearch?: () => void;
   onExport?: (format: 'png' | 'svg' | 'markdown') => void;
   onSwitchUser?: () => void;
+  onOpenAuthModal?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -24,7 +25,8 @@ export const Header: React.FC<HeaderProps> = ({
   onAIAnalyze,
   onOpenSearch,
   onExport,
-  onSwitchUser
+  onSwitchUser,
+  onOpenAuthModal,
 }) => {
   const [isExportOpen, setIsExportOpen] = React.useState(false);
 
@@ -208,10 +210,10 @@ export const Header: React.FC<HeaderProps> = ({
           Fork
         </button>
 
-        {user && (
+        {user ? (
           <button
-            onClick={onSwitchUser}
-            title="Click to switch test user identity"
+            onClick={onOpenAuthModal || onSwitchUser}
+            title="Click to open Authentication & Profile settings"
             style={{
               fontFamily: 'Inter, sans-serif',
               fontSize: '11px',
@@ -229,6 +231,23 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--laurel)' }}></span>
             @{user.username}
+          </button>
+        ) : (
+          <button
+            onClick={onOpenAuthModal}
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: '11px',
+              fontWeight: 600,
+              background: 'var(--gold)',
+              color: '#FFFDF8',
+              border: 'none',
+              padding: '6px 14px',
+              borderRadius: '20px',
+              cursor: 'pointer',
+            }}
+          >
+            Sign In / Profile
           </button>
         )}
       </div>

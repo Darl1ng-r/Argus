@@ -48,3 +48,15 @@ export const voteLimiter = rateLimit({
   store: makeStore(),
   message: { error: 'Voting speed limit exceeded. Please wait before voting again.' },
 });
+
+/** Applied to Auth endpoints (Login, Reset Password) — 5 attempts per 10 minutes temporary lockout. */
+export const authBruteForceLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 5, // 5 attempts limit
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: makeStore(),
+  message: {
+    error: 'Too many failed authentication attempts. Account temporarily locked for 10 minutes to prevent brute force attacks. Please try again later.',
+  },
+});

@@ -10,6 +10,7 @@ exports.validateEdgeType = validateEdgeType;
 exports.validateVoteType = validateVoteType;
 exports.validateIdentifier = validateIdentifier;
 exports.sanitizeFlagReason = sanitizeFlagReason;
+exports.validatePasswordStrength = validatePasswordStrength;
 const isomorphic_dompurify_1 = __importDefault(require("isomorphic-dompurify"));
 class ValidationError extends Error {
     constructor(message) {
@@ -125,4 +126,33 @@ function sanitizeFlagReason(raw) {
         throw new ValidationError(`Flag reason exceeds maximum limit of 250 characters (received ${sanitized.length} characters).`);
     }
     return sanitized || 'Inappropriate content';
+}
+/**
+ * Validates password strength according to production security policies:
+ * - Minimum 12 characters
+ * - Requires uppercase letter
+ * - Requires lowercase letter
+ * - Requires number
+ * - Requires special character
+ */
+function validatePasswordStrength(raw) {
+    if (typeof raw !== 'string' || !raw) {
+        throw new ValidationError('Password is required.');
+    }
+    if (raw.length < 12) {
+        throw new ValidationError('Password must be at least 12 characters long.');
+    }
+    if (!/[A-Z]/.test(raw)) {
+        throw new ValidationError('Password must contain at least one uppercase letter (A-Z).');
+    }
+    if (!/[a-z]/.test(raw)) {
+        throw new ValidationError('Password must contain at least one lowercase letter (a-z).');
+    }
+    if (!/[0-9]/.test(raw)) {
+        throw new ValidationError('Password must contain at least one number (0-9).');
+    }
+    if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]/.test(raw)) {
+        throw new ValidationError('Password must contain at least one special character (!@#$%^&*...).');
+    }
+    return raw;
 }

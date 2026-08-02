@@ -19,6 +19,7 @@ const topics_js_1 = __importDefault(require("./routes/topics.js"));
 const nodes_js_1 = __importDefault(require("./routes/nodes.js"));
 const misc_js_1 = __importDefault(require("./routes/misc.js"));
 const notifications_js_1 = __importDefault(require("./routes/notifications.js"));
+const auth_js_1 = __importDefault(require("./routes/auth.js"));
 const metrics_js_1 = require("./utils/metrics.js");
 const tracer_js_1 = require("./utils/tracer.js");
 // -----------------------------------------------------------------------
@@ -224,6 +225,7 @@ app.get('/metrics', async (req, res) => {
 // Route Mounting
 // -----------------------------------------------------------------------
 app.use('/api', misc_js_1.default);
+app.use('/api/auth', auth_js_1.default);
 app.use('/api/topics', topics_js_1.default);
 app.use('/api/topics/:id/nodes', nodes_js_1.default);
 app.use('/api/notifications', notifications_js_1.default);

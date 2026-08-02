@@ -14,6 +14,7 @@ import topicsRouter from './routes/topics.js';
 import nodesRouter from './routes/nodes.js';
 import miscRouter from './routes/misc.js';
 import notificationsRouter from './routes/notifications.js';
+import authRouter from './routes/auth.js';
 import { metricsMiddleware, getPrometheusMetrics, getMetricsContentType } from './utils/metrics.js';
 import { openTelemetryMiddleware } from './utils/tracer.js';
 
@@ -241,6 +242,7 @@ app.get('/metrics', async (req: Request, res: Response) => {
 // Route Mounting
 // -----------------------------------------------------------------------
 app.use('/api', miscRouter);
+app.use('/api/auth', authRouter);
 app.use('/api/topics', topicsRouter);
 app.use('/api/topics/:id/nodes', nodesRouter);
 app.use('/api/notifications', notificationsRouter);

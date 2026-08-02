@@ -1,6 +1,8 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { HomePage } from './pages/HomePage';
+import { RegisterPage } from './pages/RegisterPage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { User } from './types';
 import { getDevUserCredentials, switchDevUser, apiFetch } from './utils/auth';
 
@@ -72,6 +74,9 @@ export const App: React.FC = () => {
       <Suspense fallback={<GraphLoadingFallback />}>
         <Routes>
           <Route path="/" element={<HomePage user={currentUser} onSwitchUser={handleSwitchUser} />} />
+          <Route path="/register" element={<RegisterPage onRegisterSuccess={() => fetchUserProfile()} />} />
+          <Route path="/forgot-password" element={<ResetPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route
             path="/t/:topicId"
             element={<TopicPage currentUser={currentUser} onSwitchUser={handleSwitchUser} />}

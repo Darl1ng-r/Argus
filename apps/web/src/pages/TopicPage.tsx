@@ -7,6 +7,7 @@ import { Legend } from '../components/Legend';
 import { Toast, ToastState } from '../components/Toast';
 import { AIAssistantModal, AIAnalysisResult } from '../components/AIAssistantModal';
 import { NodeSearchModal } from '../components/NodeSearchModal';
+import { AuthModal } from '../components/AuthModal';
 import { useTopicSSE } from '../hooks/useTopicSSE';
 import { useGraphExport } from '../hooks/useGraphExport';
 import { Topic, ClaimNode, ViewMode, EdgeType, User } from '../types';
@@ -36,8 +37,9 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
 
-  // Search & Export & Cytoscape Core states
+  // Search & Export & Auth & Cytoscape Core states
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [cyInstance, setCyInstance] = useState<Core | null>(null);
 
   // AI Assistant States
@@ -460,6 +462,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
         onOpenSearch={() => setIsSearchOpen(true)}
         onExport={handleExport}
         onSwitchUser={onSwitchUser}
+        onOpenAuthModal={() => setIsAuthModalOpen(true)}
       />
 
       <div className="app">
@@ -623,6 +626,14 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
         nodes={topic?.nodes || []}
         onClose={() => setIsSearchOpen(false)}
         onSelectNode={handleSelectNode}
+      />
+
+      {/* Auth & Profile Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        user={currentUser}
+        onClose={() => setIsAuthModalOpen(false)}
+        onUserChanged={onSwitchUser}
       />
 
       <Toast toast={toast} />

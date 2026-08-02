@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { User } from '../types';
 import { apiFetch } from '../utils/auth';
+import { AuthModal } from '../components/AuthModal';
 
 export interface TopicSummary {
   id: string;
@@ -28,6 +29,7 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
   const [newRootClaim, setNewRootClaim] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
 
@@ -122,10 +124,10 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
             ＋ Start a Debate
           </button>
 
-          {user && (
+          {user ? (
             <button
-              onClick={onSwitchUser}
-              title="Click to switch test user identity"
+              onClick={() => setIsAuthModalOpen(true)}
+              title="Click to open Authentication & Profile settings"
               style={{
                 fontFamily: 'Inter, sans-serif',
                 fontSize: '11px',
@@ -143,6 +145,23 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
             >
               <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--laurel)' }}></span>
               @{user.username}
+            </button>
+          ) : (
+            <button
+              onClick={() => setIsAuthModalOpen(true)}
+              style={{
+                fontFamily: 'Inter, sans-serif',
+                fontSize: '11px',
+                fontWeight: 600,
+                background: 'var(--gold)',
+                color: '#FFFDF8',
+                border: 'none',
+                padding: '6px 14px',
+                borderRadius: '20px',
+                cursor: 'pointer',
+              }}
+            >
+              Sign In / Profile
             </button>
           )}
         </div>
@@ -422,6 +441,14 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
           </div>
         </div>
       )}
+
+      {/* Auth & Profile Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        user={user}
+        onClose={() => setIsAuthModalOpen(false)}
+        onUserChanged={onSwitchUser}
+      />
     </div>
   );
 };
