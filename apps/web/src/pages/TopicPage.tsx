@@ -159,6 +159,38 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
       }
     });
 
+    eventSource.addEventListener('node_updated', (e: MessageEvent) => {
+      try {
+        const updatedNode: ClaimNode = JSON.parse(e.data);
+        setTopic((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            nodes: prev.nodes.map((n) => (n.id === updatedNode.id ? { ...n, ...updatedNode } : n)),
+          };
+        });
+        showToast('⚡ Live: A claim was edited.', 'info');
+      } catch (err) {
+        console.error('Failed to parse SSE node_updated payload', err);
+      }
+    });
+
+    eventSource.addEventListener('node_deleted', (e: MessageEvent) => {
+      try {
+        const payload: { nodeId: string } = JSON.parse(e.data);
+        setTopic((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            nodes: prev.nodes.filter((n) => n.id !== payload.nodeId),
+          };
+        });
+        showToast('⚡ Live: A claim was removed.', 'info');
+      } catch (err) {
+        console.error('Failed to parse SSE node_deleted payload', err);
+      }
+    });
+
     eventSource.addEventListener('root_updated', (e: MessageEvent) => {
       try {
         const updatedRoot: ClaimNode = JSON.parse(e.data);
@@ -358,6 +390,61 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     } catch (err: any) {
       console.error('Failed to create node on backend', err);
       showToast('Network error: Could not submit claim to server.', 'error');
+    }
+  };
+
+  const handleEditClaim = async (nodeId: string, newContent: string) => {
+    if (!topic) return;
+    try {
+      const res = await apiFetch(`/api/topics/${topic.id}/nodes/${nodeId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ content: newContent }),
+      });
+
+      if (res.ok) {
+        const updatedNode: ClaimNode = await res.json();
+        setTopic((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            nodes: prev.nodes.map((n) => (n.id === nodeId ? updatedNode : n)),
+          };
+        });
+        showToast('Claim content updated.', 'success');
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || 'Failed to edit claim.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Failed to edit claim on backend', err);
+      showToast('Network error: Could not save claim edit.', 'error');
+    }
+  };
+
+  const handleDeleteClaim = async (nodeId: string) => {
+    if (!topic) return;
+    try {
+      const res = await apiFetch(`/api/topics/${topic.id}/nodes/${nodeId}`, {
+        method: 'DELETE',
+      });
+
+      if (res.ok) {
+        setTopic((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            nodes: prev.nodes.filter((n) => n.id !== nodeId),
+          };
+        });
+        if (selectedId === nodeId) setSelectedId(null);
+        showToast('Claim removed from discussion.', 'success');
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || 'Failed to delete claim.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Failed to delete claim on backend', err);
+      showToast('Network error: Could not delete claim.', 'error');
     }
   };
 
@@ -581,6 +668,8 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
             currentUser={currentUser}
             onVote={handleVote}
             onAddClaim={handleAddClaim}
+            onEditClaim={handleEditClaim}
+            onDeleteClaim={handleDeleteClaim}
             onShareLink={handleShareLink}
           />
         )}

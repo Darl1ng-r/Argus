@@ -21,6 +21,8 @@ interface SidePanelProps {
   currentUser: User | null;
   onVote: (nodeId: string, type: 'support' | 'contest') => void;
   onAddClaim: (parentId: string, edgeType: EdgeType, content: string) => void;
+  onEditClaim?: (nodeId: string, newContent: string) => void;
+  onDeleteClaim?: (nodeId: string) => void;
   onShareLink?: () => void;
 }
 
@@ -29,11 +31,17 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   currentUser,
   onVote,
   onAddClaim,
+  onEditClaim,
+  onDeleteClaim,
   onShareLink
 }) => {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [edgeType, setEdgeType] = useState<EdgeType>('supports');
   const [claimText, setClaimText] = useState('');
+
+  // Edit claim state
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState('');
 
   if (!selectedNode) {
     return (
@@ -56,12 +64,33 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   const userVote = selectedNode.userVote;
   const detectedUrl = extractFirstUrl(selectedNode.content);
 
+  const isAuthorOrOwner = currentUser && selectedNode.authorId === currentUser.id;
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!claimText.trim()) return;
     onAddClaim(selectedNode.id, edgeType, claimText.trim());
     setClaimText('');
     setIsFormOpen(false);
+  };
+
+  const handleStartEdit = () => {
+    setEditText(selectedNode.content);
+    setIsEditing(true);
+  };
+
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editText.trim() || !onEditClaim) return;
+    onEditClaim(selectedNode.id, editText.trim());
+    setIsEditing(false);
+  };
+
+  const handleDelete = () => {
+    if (!onDeleteClaim) return;
+    if (window.confirm('Are you sure you want to delete this claim? (Claims with replies cannot be deleted)')) {
+      onDeleteClaim(selectedNode.id);
+    }
   };
 
   return (
@@ -71,34 +100,135 @@ export const SidePanel: React.FC<SidePanelProps> = ({
           {selectedNode.edgeType === 'root' ? 'THE ROOT CLAIM' : 'SELECTED CLAIM'}
         </h2>
 
-        {onShareLink && (
-          <button
-            onClick={onShareLink}
-            title="Copy deep link URL for this claim"
-            style={{
-              background: 'transparent',
-              border: '1px solid var(--marble-line)',
-              borderRadius: '4px',
-              padding: '3px 8px',
-              fontFamily: 'Inter, sans-serif',
-              fontSize: '11px',
-              color: 'var(--aegean)',
-              cursor: 'pointer',
-              fontWeight: 600
-            }}
-          >
-            🔗 Share Link
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: '6px' }}>
+          {onShareLink && (
+            <button
+              onClick={onShareLink}
+              title="Copy deep link URL for this claim"
+              style={{
+                background: 'transparent',
+                border: '1px solid var(--marble-line)',
+                borderRadius: '4px',
+                padding: '3px 8px',
+                fontFamily: 'Inter, sans-serif',
+                fontSize: '11px',
+                color: 'var(--aegean)',
+                cursor: 'pointer',
+                fontWeight: 600
+              }}
+            >
+              🔗 Share
+            </button>
+          )}
+
+          {isAuthorOrOwner && onEditClaim && selectedNode.edgeType !== 'root' && (
+            <button
+              onClick={handleStartEdit}
+              title="Edit claim content"
+              style={{
+                background: 'transparent',
+                border: '1px solid var(--marble-line)',
+                borderRadius: '4px',
+                padding: '3px 8px',
+                fontFamily: 'Inter, sans-serif',
+                fontSize: '11px',
+                color: 'var(--gold)',
+                cursor: 'pointer',
+                fontWeight: 600
+              }}
+            >
+              ✏️ Edit
+            </button>
+          )}
+
+          {isAuthorOrOwner && onDeleteClaim && selectedNode.edgeType !== 'root' && (
+            <button
+              onClick={handleDelete}
+              title="Delete claim"
+              style={{
+                background: 'transparent',
+                border: '1px solid #F2D5CE',
+                borderRadius: '4px',
+                padding: '3px 8px',
+                fontFamily: 'Inter, sans-serif',
+                fontSize: '11px',
+                color: 'var(--oxide)',
+                cursor: 'pointer',
+                fontWeight: 600
+              }}
+            >
+              🗑️ Delete
+            </button>
+          )}
+        </div>
       </div>
 
       <div id="panelBody">
         <div className="panel-eyebrow" style={{ color: meta.color }}>
           <span className="dot" style={{ background: meta.color }}></span>
           {meta.label}
+          {selectedNode.authorUsername && (
+            <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--ink-soft)', fontWeight: 400 }}>
+              by @{selectedNode.authorUsername}
+            </span>
+          )}
         </div>
 
-        <div className="panel-content">{selectedNode.content}</div>
+        {isEditing ? (
+          <form onSubmit={handleSaveEdit} style={{ marginBottom: '14px' }}>
+            <textarea
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              style={{
+                width: '100%',
+                minHeight: '80px',
+                padding: '10px',
+                fontFamily: 'Crimson Pro, serif',
+                fontSize: '15px',
+                borderRadius: '6px',
+                border: '1px solid var(--gold)',
+                background: '#FFFDF8',
+                marginBottom: '8px',
+                boxSizing: 'border-box'
+              }}
+            />
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setIsEditing(false)}
+                style={{
+                  padding: '4px 10px',
+                  background: 'transparent',
+                  border: '1px solid var(--marble-line)',
+                  borderRadius: '4px',
+                  fontFamily: 'Inter, sans-serif',
+                  fontSize: '12px',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                style={{
+                  padding: '4px 12px',
+                  background: 'var(--gold)',
+                  color: '#FFFDF8',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontFamily: 'Inter, sans-serif',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                Save Edit
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="panel-content">{selectedNode.content}</div>
+        )}
 
         {detectedUrl && <LinkPreviewCard url={detectedUrl} />}
 
