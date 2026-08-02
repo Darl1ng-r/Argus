@@ -26,7 +26,7 @@ describe('Performance Fix: CTE Row Limit & Memory Protection', () => {
         } as any;
       }
 
-      if (typeof sql === 'string' && sql.includes('WITH RECURSIVE subgraph')) {
+      if (typeof sql === 'string' && (sql.includes('WITH RECURSIVE topic_tree') || sql.includes('WITH RECURSIVE subgraph'))) {
         return {
           rowCount: 1,
           rows: [
@@ -54,8 +54,8 @@ describe('Performance Fix: CTE Row Limit & Memory Protection', () => {
     const topic = await getTopicSubgraph('large-topic', undefined, 5);
 
     expect(topic).not.toBeNull();
-    // Verify that the executed SQL query contains LIMIT 500
-    expect(executedSql).toContain('LIMIT 500');
+    // Verify that the executed SQL query contains bounded_tree or LIMIT parameter for row cap
+    expect(executedSql).toMatch(/LIMIT \$5|LIMIT 500/);
 
     querySpy.mockRestore();
   });

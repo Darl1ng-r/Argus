@@ -21,7 +21,7 @@ describe('Performance Fix: Decoupled Base Subgraph Cache', () => {
         } as any;
       }
 
-      if (typeof sql === 'string' && sql.includes('WITH RECURSIVE subgraph')) {
+      if (typeof sql === 'string' && (sql.includes('WITH RECURSIVE topic_tree') || sql.includes('WITH RECURSIVE subgraph'))) {
         return {
           rowCount: 1,
           rows: [
@@ -54,13 +54,13 @@ describe('Performance Fix: Decoupled Base Subgraph Cache', () => {
     });
 
     // Call getTopicSubgraph for User A and User B
-    const topicUserA = await getTopicSubgraph('test-topic-1', undefined, 2, 'user-a');
-    const topicUserB = await getTopicSubgraph('test-topic-1', undefined, 2, 'user-b');
+    const topicUserA = await getTopicSubgraph('test-topic-1', 'user-a');
+    const topicUserB = await getTopicSubgraph('test-topic-1', 'user-b');
 
-    expect(topicUserA).not.toBeNull();
-    expect(topicUserB).not.toBeNull();
-    expect(topicUserA?.nodes[0].userVote).toBe('support');
-    expect(topicUserB?.nodes[0].userVote).toBe('support');
+    expect(topicUserA?.length).toBeGreaterThan(0);
+    expect(topicUserB?.length).toBeGreaterThan(0);
+    expect(topicUserA?.[0].userVote).toBe('support');
+    expect(topicUserB?.[0].userVote).toBe('support');
 
     querySpy.mockRestore();
   });

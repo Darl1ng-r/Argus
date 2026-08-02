@@ -7,7 +7,8 @@ import { Legend } from '../components/Legend';
 import { Toast, ToastState } from '../components/Toast';
 import { AIAssistantModal, AIAnalysisResult } from '../components/AIAssistantModal';
 import { NodeSearchModal } from '../components/NodeSearchModal';
-import { exportGraphAsPNG, exportGraphAsSVG, exportGraphAsMarkdown } from '../utils/exportUtils';
+import { useTopicSSE } from '../hooks/useTopicSSE';
+import { useGraphExport } from '../hooks/useGraphExport';
 import { Topic, ClaimNode, ViewMode, EdgeType, User } from '../types';
 import { Core } from 'cytoscape';
 import { apiFetch, getAuthHeaders } from '../utils/auth';
@@ -54,6 +55,13 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     sharedNodes: ClaimNode[];
   } | null>(null);
   const [isDiffLoading, setIsDiffLoading] = useState(false);
+
+  const showToast = useCallback((message: string, type: 'info' | 'error' | 'success' = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => {
+      setToast((current) => (current?.message === message ? null : current));
+    }, 3200);
+  }, []);
 
   // Initialize ViewMode and SelectedNode from URL Query Parameters on load
   useEffect(() => {
@@ -112,127 +120,73 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     }
   }, [getAuthHeaders]);
 
-  const [isLive, setIsLive] = useState(false);
-
   useEffect(() => {
     if (topicId) {
       fetchTopic(topicId);
     }
   }, [topicId, fetchTopic]);
 
-  // Real-time Collaboration via Server-Sent Events (SSE)
-  useEffect(() => {
-    if (!topicId) return;
+  // Real-time Collaboration via custom useTopicSSE Hook
+  const { isLive } = useTopicSSE({
+    topicId,
+    onNodeAdded: useCallback((newNode: ClaimNode) => {
+      setTopic((prev) => {
+        if (!prev) return null;
+        if (prev.nodes.some((n) => n.id === newNode.id)) return prev;
+        return { ...prev, nodes: [...prev.nodes, newNode] };
+      });
+    }, []),
+    onNodeVoted: useCallback((updatedNode: ClaimNode) => {
+      setTopic((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          nodes: prev.nodes.map((n) => (n.id === updatedNode.id ? { ...n, ...updatedNode, userVote: n.userVote } : n)),
+        };
+      });
+    }, []),
+    onNodeUpdated: useCallback((updatedNode: ClaimNode) => {
+      setTopic((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          nodes: prev.nodes.map((n) => (n.id === updatedNode.id ? { ...n, ...updatedNode } : n)),
+        };
+      });
+    }, []),
+    onNodeDeleted: useCallback((deletedNodeId: string) => {
+      setTopic((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          nodes: prev.nodes.filter((n) => n.id !== deletedNodeId),
+        };
+      });
+    }, []),
+    onRootUpdated: useCallback((updatedRoot: ClaimNode) => {
+      setTopic((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          title: updatedRoot.content,
+          nodes: prev.nodes.map((n) => (n.id === updatedRoot.id ? updatedRoot : n)),
+        };
+      });
+    }, []),
+    onToast: showToast,
+  });
 
-    const eventSource = new EventSource(`/api/topics/${topicId}/events`);
+  // Canvas Graph Export via custom useGraphExport Hook
+  const { handleExport } = useGraphExport({ topic, cyInstance, onToast: showToast });
 
-    eventSource.addEventListener('connected', () => {
-      setIsLive(true);
-    });
-
-    eventSource.addEventListener('node_added', (e: MessageEvent) => {
-      try {
-        const newNode: ClaimNode = JSON.parse(e.data);
-        setTopic((prev) => {
-          if (!prev) return null;
-          if (prev.nodes.some((n) => n.id === newNode.id)) return prev;
-          return { ...prev, nodes: [...prev.nodes, newNode] };
-        });
-        showToast(`⚡ Live: New claim added to graph.`, 'info');
-      } catch (err) {
-        console.error('Failed to parse SSE node_added payload', err);
-      }
-    });
-
-    eventSource.addEventListener('node_voted', (e: MessageEvent) => {
-      try {
-        const updatedNode: ClaimNode = JSON.parse(e.data);
-        setTopic((prev) => {
-          if (!prev) return null;
-          return {
-            ...prev,
-            nodes: prev.nodes.map((n) => (n.id === updatedNode.id ? { ...n, ...updatedNode, userVote: n.userVote } : n)),
-          };
-        });
-      } catch (err) {
-        console.error('Failed to parse SSE node_voted payload', err);
-      }
-    });
-
-    eventSource.addEventListener('node_updated', (e: MessageEvent) => {
-      try {
-        const updatedNode: ClaimNode = JSON.parse(e.data);
-        setTopic((prev) => {
-          if (!prev) return null;
-          return {
-            ...prev,
-            nodes: prev.nodes.map((n) => (n.id === updatedNode.id ? { ...n, ...updatedNode } : n)),
-          };
-        });
-        showToast('⚡ Live: A claim was edited.', 'info');
-      } catch (err) {
-        console.error('Failed to parse SSE node_updated payload', err);
-      }
-    });
-
-    eventSource.addEventListener('node_deleted', (e: MessageEvent) => {
-      try {
-        const payload: { nodeId: string } = JSON.parse(e.data);
-        setTopic((prev) => {
-          if (!prev) return null;
-          return {
-            ...prev,
-            nodes: prev.nodes.filter((n) => n.id !== payload.nodeId),
-          };
-        });
-        showToast('⚡ Live: A claim was removed.', 'info');
-      } catch (err) {
-        console.error('Failed to parse SSE node_deleted payload', err);
-      }
-    });
-
-    eventSource.addEventListener('root_updated', (e: MessageEvent) => {
-      try {
-        const updatedRoot: ClaimNode = JSON.parse(e.data);
-        setTopic((prev) => {
-          if (!prev) return null;
-          return {
-            ...prev,
-            title: updatedRoot.content,
-            nodes: prev.nodes.map((n) => (n.id === updatedRoot.id ? updatedRoot : n)),
-          };
-        });
-        showToast(`⚡ Live: Topic root claim updated.`, 'info');
-      } catch (err) {
-        console.error('Failed to parse SSE root_updated payload', err);
-      }
-    });
-
-    eventSource.onerror = () => {
-      setIsLive(false);
-    };
-
-    return () => {
-      setIsLive(false);
-      eventSource.close();
-    };
-  }, [topicId]);
-
-  const showToast = (message: string, type: 'info' | 'error' | 'success' = 'info') => {
-    setToast({ message, type });
-    setTimeout(() => {
-      setToast((current) => (current?.message === message ? null : current));
-    }, 3200);
-  };
-
-  const handleShareLink = () => {
+  const handleShareLink = useCallback(() => {
     const deepLinkUrl = window.location.href;
     navigator.clipboard.writeText(deepLinkUrl).then(() => {
       showToast('🔗 Deep link URL copied to clipboard!', 'success');
     }).catch(() => {
       showToast(`Deep link: ${deepLinkUrl}`, 'info');
     });
-  };
+  }, [showToast]);
 
   // Keyboard shortcut for Ctrl+F node search modal
   useEffect(() => {
@@ -245,29 +199,6 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
-
-  const handleExport = (format: 'png' | 'svg' | 'markdown') => {
-    if (!topic) return;
-
-    if (format === 'markdown') {
-      exportGraphAsMarkdown(topic);
-      showToast('📝 Markdown outline exported successfully.', 'success');
-      return;
-    }
-
-    if (!cyInstance) {
-      showToast('Canvas graph engine is initializing, please try again.', 'error');
-      return;
-    }
-
-    if (format === 'png') {
-      exportGraphAsPNG(cyInstance, topic.title);
-      showToast('🖼️ High-resolution PNG graph image exported.', 'success');
-    } else if (format === 'svg') {
-      exportGraphAsSVG(cyInstance, topic.title);
-      showToast('📐 Vector graph image exported.', 'success');
-    }
-  };
 
   const handleAIAnalyze = async () => {
     if (!topic) return;
