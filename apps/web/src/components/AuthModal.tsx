@@ -6,6 +6,7 @@ import { getAuthToken, setAuthToken, clearAuthToken, apiFetch } from '../utils/a
 interface AuthModalProps {
   isOpen: boolean;
   user: User | null;
+  noticeMessage?: string | null;
   onClose: () => void;
   onUserChanged: () => void;
 }
@@ -13,6 +14,7 @@ interface AuthModalProps {
 export const AuthModal: React.FC<AuthModalProps> = ({
   isOpen,
   user,
+  noticeMessage,
   onClose,
   onUserChanged,
 }) => {
@@ -346,6 +348,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         </div>
 
         {/* Notification Alerts */}
+        {noticeMessage && !errorMsg && !successMsg && (
+          <div
+            style={{
+              background: '#FFF9E6',
+              borderBottom: '1px solid #FFE099',
+              color: '#8A6D0B',
+              fontSize: '13px',
+              fontFamily: 'Inter, sans-serif',
+              padding: '11px 24px',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            {noticeMessage}
+          </div>
+        )}
+
         {errorMsg && (
           <div
             style={{

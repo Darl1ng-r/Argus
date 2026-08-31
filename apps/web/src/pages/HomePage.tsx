@@ -30,10 +30,30 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
   const [formError, setFormError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
 
   const navigate = useNavigate();
+
+  const handleStartDebateClick = () => {
+    if (!user) {
+      setAuthNotice('Authentication required: Please sign in or create an account to start a debate.');
+      setIsAuthModalOpen(true);
+      return;
+    }
+    setAuthNotice(null);
+    setIsModalOpen(true);
+  };
+
+  const handleDebateCardClick = (topicId: string) => {
+    if (!user) {
+      setAuthNotice('Authentication required: Please sign in or create an account to view and participate in debates.');
+      setIsAuthModalOpen(true);
+      return;
+    }
+    navigate(`/t/${topicId}`);
+  };
 
   // Fix #6 — Single API call returns enriched data; no N+1 per-topic fetches
   const fetchTopics = useCallback(async (p = 1) => {
@@ -118,7 +138,7 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <button
             className="fork-btn"
-            onClick={() => setIsModalOpen(true)}
+            onClick={handleStartDebateClick}
             style={{ background: 'var(--gold)', color: '#FFFDF8' }}
           >
             ＋ Start a Debate
@@ -261,7 +281,7 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
             <p style={{ fontFamily: 'Crimson Pro, serif', fontSize: '16px', color: 'var(--ink-soft)', marginBottom: '20px' }}>
               {searchQuery ? `No topics match "${searchQuery}".` : 'Be the first to propose an argument map on Argus.'}
             </p>
-            <button className="fork-btn" onClick={() => setIsModalOpen(true)} style={{ background: 'var(--gold)', margin: '0 auto' }}>
+            <button className="fork-btn" onClick={handleStartDebateClick} style={{ background: 'var(--gold)', margin: '0 auto' }}>
               ＋ Start a Debate
             </button>
           </div>
@@ -273,7 +293,7 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
             {filteredTopics.map((topic) => (
               <div
                 key={topic.id}
-                onClick={() => navigate(`/t/${topic.id}`)}
+                onClick={() => handleDebateCardClick(topic.id)}
                 style={{
                   background: 'linear-gradient(180deg, #FFFDF8, #F3EEE1)',
                   border: '1px solid var(--marble-line)',
@@ -446,7 +466,11 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
       <AuthModal
         isOpen={isAuthModalOpen}
         user={user}
-        onClose={() => setIsAuthModalOpen(false)}
+        noticeMessage={authNotice}
+        onClose={() => {
+          setIsAuthModalOpen(false);
+          setAuthNotice(null);
+        }}
         onUserChanged={onSwitchUser}
       />
     </div>
