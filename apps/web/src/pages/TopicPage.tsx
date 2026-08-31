@@ -184,7 +184,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   const handleShareLink = useCallback(() => {
     const deepLinkUrl = window.location.href;
     navigator.clipboard.writeText(deepLinkUrl).then(() => {
-      showToast('🔗 Deep link URL copied to clipboard!', 'success');
+      showToast('Deep link URL copied to clipboard!', 'success');
     }).catch(() => {
       showToast(`Deep link: ${deepLinkUrl}`, 'info');
     });
@@ -491,7 +491,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
                 className="fork-btn"
                 style={{ background: 'var(--oxide)', margin: '0 auto' }}
               >
-                ↻ Retry Loading Graph
+                Retry Loading Graph
               </button>
             </div>
           </div>
@@ -547,7 +547,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
                 <div style={{ display: 'flex', gap: '16px' }}>
                   <div style={{ flex: 1, padding: '16px', background: '#F0F4E8', border: '1px solid #C4D4A4', borderRadius: '8px' }}>
                     <h4 style={{ margin: '0 0 8px', color: '#6E7B4A', fontFamily: 'Cinzel, serif', fontSize: '13px' }}>
-                      🟢 CLAIMS ADDED IN THIS FORK ({diffResult.addedNodes.length})
+                      CLAIMS ADDED IN THIS FORK ({diffResult.addedNodes.length})
                     </h4>
                     {diffResult.addedNodes.map((n) => (
                       <div key={n.id} style={{ fontFamily: 'Crimson Pro, serif', fontSize: '14.5px', color: 'var(--ink)', marginBottom: '6px' }}>
@@ -558,7 +558,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
 
                   <div style={{ flex: 1, padding: '16px', background: '#FDF2F0', border: '1px solid #F2D5CE', borderRadius: '8px' }}>
                     <h4 style={{ margin: '0 0 8px', color: '#A2472E', fontFamily: 'Cinzel, serif', fontSize: '13px' }}>
-                      🔴 CLAIMS REMOVED / MISSING ({diffResult.removedNodes.length})
+                      CLAIMS REMOVED / MISSING ({diffResult.removedNodes.length})
                     </h4>
                     {diffResult.removedNodes.map((n) => (
                       <div key={n.id} style={{ fontFamily: 'Crimson Pro, serif', fontSize: '14.5px', color: 'var(--ink)', marginBottom: '6px' }}>
@@ -569,7 +569,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
 
                   <div style={{ flex: 1, padding: '16px', background: '#FFFDF8', border: '1px solid var(--marble-line)', borderRadius: '8px' }}>
                     <h4 style={{ margin: '0 0 8px', color: 'var(--gold)', fontFamily: 'Cinzel, serif', fontSize: '13px' }}>
-                      🟡 SHARED CLAIMS ({diffResult.sharedNodes.length})
+                      SHARED CLAIMS ({diffResult.sharedNodes.length})
                     </h4>
                     {diffResult.sharedNodes.map((n) => (
                       <div key={n.id} style={{ fontFamily: 'Crimson Pro, serif', fontSize: '14.5px', color: 'var(--ink)', marginBottom: '6px' }}>

@@ -217,7 +217,7 @@ export const ResetPasswordPage: React.FC = () => {
           </p>
         </div>
 
-        {/* Notifications */}
+        {/* Error / Success Notifications */}
         {errorMsg && (
           <div
             style={{
@@ -230,7 +230,7 @@ export const ResetPasswordPage: React.FC = () => {
               fontWeight: 600,
             }}
           >
-            ⚠️ {errorMsg}
+            {errorMsg}
           </div>
         )}
 
@@ -246,13 +246,16 @@ export const ResetPasswordPage: React.FC = () => {
               fontWeight: 600,
             }}
           >
-            ✓ {successMsg}
+            {successMsg}
           </div>
         )}
 
-        {/* MODE 1: FORGOT PASSWORD */}
+        {/* FORGOT PASSWORD FORM */}
         {mode === 'forgot' && !forgotSubmitted && (
-          <form onSubmit={handleForgotSubmit} style={{ padding: '28px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+          <form onSubmit={handleForgotSubmit} style={{ padding: '28px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '13.5px', color: 'var(--ink-soft, #5B5348)', margin: 0, lineHeight: 1.5 }}>
+              Enter the email address associated with your account and we will send you a password reset verification link.
+            </p>
             <div>
               <label style={{ display: 'block', fontFamily: 'Cinzel, serif', fontSize: '12px', fontWeight: 700, letterSpacing: '0.06em', marginBottom: '6px', color: 'var(--ink, #2B2622)' }}>
                 REGISTERED EMAIL ADDRESS
@@ -452,7 +455,6 @@ export const ResetPasswordPage: React.FC = () => {
         {/* RESET PASSWORD SUCCESS SCREEN */}
         {mode === 'reset' && resetSuccess && (
           <div style={{ padding: '28px', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ fontSize: '36px' }}>🎉</div>
             <h2 style={{ fontFamily: 'Cinzel, serif', fontSize: '18px', margin: 0, color: 'var(--ink, #2B2622)' }}>
               PASSWORD RESET SUCCESSFUL
             </h2>
@@ -460,7 +462,7 @@ export const ResetPasswordPage: React.FC = () => {
               Your password has been updated. You can now sign in using your new credentials.
             </p>
             <button
-              onClick={() => navigate('/')}
+              onClick={() => navigate('/login')}
               style={{
                 background: 'var(--gold, #B8892B)',
                 color: '#FFFDF8',

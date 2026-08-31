@@ -80,7 +80,6 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '18px' }}>✨</span>
             <h2
               style={{
                 fontFamily: 'Cinzel, serif',
@@ -260,7 +259,7 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
                               textTransform: 'uppercase',
                             }}
                           >
-                            ⚠️ {f.fallacyName}
+                            FALLACY: {f.fallacyName}
                           </span>
                           <span style={{ fontSize: '11px', color: 'var(--aegean, #2E5C7A)' }}>
                             Inspect Node →

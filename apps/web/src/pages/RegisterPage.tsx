@@ -261,7 +261,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegisterSuccess })
               fontWeight: 600,
             }}
           >
-            ⚠️ {errorMsg}
+            {errorMsg}
           </div>
         )}
 
@@ -277,7 +277,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegisterSuccess })
               fontWeight: 600,
             }}
           >
-            ✓ {successMsg}
+            {successMsg}
           </div>
         )}
 
@@ -292,7 +292,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegisterSuccess })
               padding: '8px 24px',
             }}
           >
-            ℹ️ {devCodeNotice}
+            {devCodeNotice}
           </div>
         )}
 
@@ -516,7 +516,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegisterSuccess })
             </button>
 
             <div style={{ textAlign: 'center', fontSize: '13px', fontFamily: 'Inter, sans-serif', color: 'var(--ink-soft, #5B5348)', marginTop: '8px' }}>
-              Already have an account? <Link to="/" style={{ color: 'var(--aegean, #2E5C7A)', fontWeight: 600, textDecoration: 'none' }}>Sign In here</Link>
+              Already have an account? <Link to="/login" style={{ color: 'var(--aegean, #2E5C7A)', fontWeight: 600, textDecoration: 'none' }}>Sign In here</Link>
             </div>
           </form>
         )}
@@ -525,7 +525,6 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegisterSuccess })
         {step === 'verify' && (
           <form onSubmit={handleVerifyEmailCode} style={{ padding: '28px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: '36px', marginBottom: '8px' }}>📬</div>
               <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '13.5px', color: 'var(--ink-soft, #5B5348)', lineHeight: 1.5 }}>
                 We have sent a 6-digit verification code to <b>{email}</b>.
                 Please enter the code below to complete registration.

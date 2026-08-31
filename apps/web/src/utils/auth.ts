@@ -43,14 +43,14 @@ export function getDevUserCredentials(): { id: string; name: string } {
 
 /** Switches dev mode user session credentials. */
 export function switchDevUser(): { id: string; name: string } {
-  const names = ['Athena', 'Socrates', 'Hypatia', 'Aristotle', 'Diogenes', 'Cleopatra'];
-  const randomName = names[Math.floor(Math.random() * names.length)];
-  const newId = 'usr_' + randomName.toLowerCase() + '_' + Math.floor(Math.random() * 100);
+  const randNum = Math.floor(Math.random() * 9000) + 1000;
+  const newId = 'usr_dev_' + randNum;
+  const newName = 'User_' + randNum;
 
   sessionStorage.setItem(DEV_USER_ID_KEY, newId);
-  sessionStorage.setItem(DEV_USER_NAME_KEY, randomName);
+  sessionStorage.setItem(DEV_USER_NAME_KEY, newName);
 
-  return { id: newId, name: randomName };
+  return { id: newId, name: newName };
 }
 
 /**

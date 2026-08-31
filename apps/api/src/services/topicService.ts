@@ -91,22 +91,148 @@ export async function createTopic(
   }
 }
 
+const MOCK_TOPICS: TopicSummary[] = [
+  {
+    id: "mars-vs-earth",
+    title: "Should humanity prioritize colonizing Mars over repairing Earth's climate?",
+    rootNodeId: "root-mars",
+    forkCount: 12,
+    createdAt: new Date().toISOString(),
+    claimCount: 7,
+    rootClaimContent: "Humanity should prioritize colonizing Mars over repairing Earth's climate."
+  },
+  {
+    id: "ai-governance",
+    title: "Should frontier AI development be restricted by international treaties?",
+    rootNodeId: "root-ai",
+    forkCount: 8,
+    createdAt: new Date().toISOString(),
+    claimCount: 5,
+    rootClaimContent: "Frontier AI development requires international non-proliferation treaties."
+  }
+];
+
+const MOCK_NODES: ClaimNode[] = [
+  {
+    id: "root-mars",
+    parent: null,
+    edgeType: "root",
+    x: 610,
+    y: 40,
+    content: "Humanity should prioritize colonizing Mars over repairing Earth's climate.",
+    support: 340,
+    contest: 210,
+    steel: true,
+    userVote: null,
+    authorId: "user-1",
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: "n1",
+    parent: "root-mars",
+    edgeType: "supports",
+    x: 90,
+    y: 300,
+    content: "A multi-planet species is far less likely to go extinct from any single catastrophe.",
+    support: 512,
+    contest: 88,
+    steel: true,
+    userVote: null,
+    authorId: "user-2",
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: "n2",
+    parent: "root-mars",
+    edgeType: "refutes",
+    x: 460,
+    y: 300,
+    content: "Every dollar spent on Mars is a dollar not spent solving a crisis we already know is solvable.",
+    support: 405,
+    contest: 140,
+    steel: true,
+    userVote: null,
+    authorId: "user-3",
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: "n3",
+    parent: "root-mars",
+    edgeType: "clarifies",
+    x: 830,
+    y: 300,
+    content: "This isn't really either/or — space agencies are under 0.1% of relevant national budgets combined.",
+    support: 180,
+    contest: 30,
+    steel: false,
+    userVote: null,
+    authorId: "user-4",
+    createdAt: new Date().toISOString()
+  }
+];
+
 export async function getAllTopics(
   page = 1,
   limit = 20,
   cursor?: string
 ): Promise<PaginatedTopics> {
-  const fetchLimit = limit + 1;
+  try {
+    const fetchLimit = limit + 1;
 
-  if (cursor) {
-    const decoded = decodeCursor(cursor);
-    const queryParams: unknown[] = [fetchLimit];
-    let whereClause = '';
+    if (cursor) {
+      const decoded = decodeCursor(cursor);
+      const queryParams: unknown[] = [fetchLimit];
+      let whereClause = '';
 
-    if (decoded) {
-      whereClause = 'WHERE (t.created_at < $2 OR (t.created_at = $2 AND t.id < $3))';
-      queryParams.push(decoded.createdAt, decoded.id);
+      if (decoded) {
+        whereClause = 'WHERE (t.created_at < $2 OR (t.created_at = $2 AND t.id < $3))';
+        queryParams.push(decoded.createdAt, decoded.id);
+      }
+
+      const topicsResult = await db.query<{
+        id: string;
+        title: string;
+        root_node_id: string;
+        fork_count: number;
+        created_at: Date;
+        claim_count: string;
+        root_claim_content: string | null;
+      }>(
+        `SELECT
+           t.id, t.title, t.root_node_id, t.fork_count, t.created_at,
+           COUNT(n.id) AS claim_count,
+           root_node.content AS root_claim_content
+         FROM topics t
+         LEFT JOIN nodes n ON n.topic_id = t.id AND n.status = 'ACTIVE'
+         LEFT JOIN nodes root_node ON root_node.id = t.root_node_id
+         ${whereClause}
+         GROUP BY t.id, root_node.content
+         ORDER BY t.created_at DESC, t.id DESC
+         LIMIT $1`,
+        queryParams
+      );
+
+      const rows = topicsResult.rows;
+      const hasMore = rows.length > limit;
+      if (hasMore) rows.pop();
+
+      const topics: TopicSummary[] = rows.map((t) => ({
+        id: t.id,
+        title: t.title,
+        rootNodeId: t.root_node_id,
+        forkCount: t.fork_count,
+        createdAt: t.created_at.toISOString(),
+        claimCount: parseInt(t.claim_count, 10),
+        rootClaimContent: t.root_claim_content,
+      }));
+
+      const lastTopic = topics[topics.length - 1];
+      const nextCursor = hasMore && lastTopic ? encodeCursor(lastTopic.createdAt, lastTopic.id) : null;
+
+      return { topics, total: topics.length, page, limit, nextCursor, hasMore };
     }
+
+    const offset = Math.max(0, (page - 1) * limit);
 
     const topicsResult = await db.query<{
       id: string;
@@ -124,11 +250,10 @@ export async function getAllTopics(
        FROM topics t
        LEFT JOIN nodes n ON n.topic_id = t.id AND n.status = 'ACTIVE'
        LEFT JOIN nodes root_node ON root_node.id = t.root_node_id
-       ${whereClause}
        GROUP BY t.id, root_node.content
        ORDER BY t.created_at DESC, t.id DESC
-       LIMIT $1`,
-      queryParams
+       LIMIT $1 OFFSET $2`,
+      [fetchLimit, offset]
     );
 
     const rows = topicsResult.rows;
@@ -148,84 +273,61 @@ export async function getAllTopics(
     const lastTopic = topics[topics.length - 1];
     const nextCursor = hasMore && lastTopic ? encodeCursor(lastTopic.createdAt, lastTopic.id) : null;
 
-    return { topics, total: topics.length, page, limit, nextCursor, hasMore };
+    return {
+      topics,
+      total: topics.length,
+      page,
+      limit,
+      nextCursor,
+      hasMore,
+    };
+  } catch (err) {
+    if (process.env.NODE_ENV === 'development') {
+      return { topics: MOCK_TOPICS, total: MOCK_TOPICS.length, page: 1, limit: 20, nextCursor: null, hasMore: false };
+    }
+    throw err;
   }
-
-  const offset = Math.max(0, (page - 1) * limit);
-
-  const topicsResult = await db.query<{
-    id: string;
-    title: string;
-    root_node_id: string;
-    fork_count: number;
-    created_at: Date;
-    claim_count: string;
-    root_claim_content: string | null;
-  }>(
-    `SELECT
-       t.id, t.title, t.root_node_id, t.fork_count, t.created_at,
-       COUNT(n.id) AS claim_count,
-       root_node.content AS root_claim_content
-     FROM topics t
-     LEFT JOIN nodes n ON n.topic_id = t.id AND n.status = 'ACTIVE'
-     LEFT JOIN nodes root_node ON root_node.id = t.root_node_id
-     GROUP BY t.id, root_node.content
-     ORDER BY t.created_at DESC, t.id DESC
-     LIMIT $1 OFFSET $2`,
-    [fetchLimit, offset]
-  );
-
-  const rows = topicsResult.rows;
-  const hasMore = rows.length > limit;
-  if (hasMore) rows.pop();
-
-  const topics: TopicSummary[] = rows.map((t) => ({
-    id: t.id,
-    title: t.title,
-    rootNodeId: t.root_node_id,
-    forkCount: t.fork_count,
-    createdAt: t.created_at.toISOString(),
-    claimCount: parseInt(t.claim_count, 10),
-    rootClaimContent: t.root_claim_content,
-  }));
-
-  const lastTopic = topics[topics.length - 1];
-  const nextCursor = hasMore && lastTopic ? encodeCursor(lastTopic.createdAt, lastTopic.id) : null;
-
-  return {
-    topics,
-    total: topics.length,
-    page,
-    limit,
-    nextCursor,
-    hasMore,
-  };
 }
 
 export async function getTopic(topicId: string, currentUserId?: string): Promise<Topic | null> {
-  const result = await db.query<{
-    id: string;
-    title: string;
-    root_node_id: string;
-    fork_count: number;
-    created_at: Date;
-  }>('SELECT id, title, root_node_id, fork_count, created_at FROM topics WHERE id = $1', [
-    topicId,
-  ]);
+  try {
+    const result = await db.query<{
+      id: string;
+      title: string;
+      root_node_id: string;
+      fork_count: number;
+      created_at: Date;
+    }>('SELECT id, title, root_node_id, fork_count, created_at FROM topics WHERE id = $1', [
+      topicId,
+    ]);
 
-  if (result.rowCount === 0) return null;
+    if (result.rowCount === 0) return null;
 
-  const topicRow = result.rows[0];
-  const nodes = await getTopicSubgraph(topicId, currentUserId);
+    const topicRow = result.rows[0];
+    const nodes = await getTopicSubgraph(topicId, currentUserId);
 
-  return {
-    id: topicRow.id,
-    title: topicRow.title,
-    rootNodeId: topicRow.root_node_id,
-    forkCount: topicRow.fork_count,
-    createdAt: topicRow.created_at.toISOString(),
-    nodes,
-  };
+    return {
+      id: topicRow.id,
+      title: topicRow.title,
+      rootNodeId: topicRow.root_node_id,
+      forkCount: topicRow.fork_count,
+      createdAt: topicRow.created_at.toISOString(),
+      nodes,
+    };
+  } catch (err) {
+    if (process.env.NODE_ENV === 'development') {
+      const foundMock = MOCK_TOPICS.find((t) => t.id === topicId) || MOCK_TOPICS[0];
+      return {
+        id: foundMock.id,
+        title: foundMock.title,
+        rootNodeId: foundMock.rootNodeId,
+        forkCount: foundMock.forkCount,
+        createdAt: foundMock.createdAt,
+        nodes: MOCK_NODES,
+      };
+    }
+    throw err;
+  }
 }
 
 export async function getTopicSubgraph(
@@ -235,102 +337,109 @@ export async function getTopicSubgraph(
   fromNodeId?: string,
   perNodeLimit = 20
 ): Promise<ClaimNode[]> {
-  const MAX_RECURSION_DEPTH = Math.min(Math.max(1, maxDepth), 20);
-  const MAX_PER_NODE_LIMIT = Math.min(Math.max(1, perNodeLimit), 50);
+  try {
+    const MAX_RECURSION_DEPTH = Math.min(Math.max(1, maxDepth), 20);
+    const MAX_PER_NODE_LIMIT = Math.min(Math.max(1, perNodeLimit), 50);
 
-  const baseCacheKey = `subgraph:${topicId}:depth:${MAX_RECURSION_DEPTH}:from:${fromNodeId || 'root'}:limit:${MAX_PER_NODE_LIMIT}`;
+    const baseCacheKey = `subgraph:${topicId}:depth:${MAX_RECURSION_DEPTH}:from:${fromNodeId || 'root'}:limit:${MAX_PER_NODE_LIMIT}`;
 
-  let baseGraph = await getCached<{ nodes: ClaimNode[] }>(baseCacheKey);
+    let baseGraph = await getCached<{ nodes: ClaimNode[] }>(baseCacheKey);
 
-  if (!baseGraph) {
-    const CTE_ROW_CAP = 500;
+    if (!baseGraph) {
+      const CTE_ROW_CAP = 500;
 
-    let queryParams: unknown[];
-    let rootAnchorClause: string;
+      let queryParams: unknown[];
+      let rootAnchorClause: string;
 
-    if (fromNodeId) {
-      rootAnchorClause = 'WHERE n.id = $2 AND n.topic_id = $1 AND n.status = $3';
-      queryParams = [topicId, fromNodeId, 'ACTIVE', MAX_RECURSION_DEPTH, MAX_PER_NODE_LIMIT, CTE_ROW_CAP];
-    } else {
-      rootAnchorClause = 'WHERE n.parent_id IS NULL AND n.topic_id = $1 AND n.status = $2';
-      queryParams = [topicId, 'ACTIVE', MAX_RECURSION_DEPTH, MAX_PER_NODE_LIMIT, CTE_ROW_CAP];
+      if (fromNodeId) {
+        rootAnchorClause = 'WHERE n.id = $2 AND n.topic_id = $1 AND n.status = $3';
+        queryParams = [topicId, fromNodeId, 'ACTIVE', MAX_RECURSION_DEPTH, MAX_PER_NODE_LIMIT, CTE_ROW_CAP];
+      } else {
+        rootAnchorClause = 'WHERE n.parent_id IS NULL AND n.topic_id = $1 AND n.status = $2';
+        queryParams = [topicId, 'ACTIVE', MAX_RECURSION_DEPTH, MAX_PER_NODE_LIMIT, CTE_ROW_CAP];
+      }
+
+      const depthParamIndex = fromNodeId ? '$4' : '$3';
+      const limitParamIndex = fromNodeId ? '$5' : '$4';
+      const capParamIndex = fromNodeId ? '$6' : '$5';
+
+      const nodesResult = await db.query(
+        `WITH RECURSIVE topic_tree AS (
+           SELECT
+             n.id, n.parent_id, n.author_id, u.username AS author_username,
+             n.edge_type, n.pos_x, n.pos_y, n.content,
+             n.support_score, n.contest_score, n.is_steel, n.created_at,
+             1 AS depth, 1::bigint AS child_ordinal
+           FROM nodes n
+           LEFT JOIN users u ON u.id = n.author_id
+           ${rootAnchorClause}
+
+           UNION ALL
+
+           SELECT
+             child.id, child.parent_id, child.author_id, u.username AS author_username,
+             child.edge_type, child.pos_x, child.pos_y, child.content,
+             child.support_score, child.contest_score, child.is_steel, child.created_at,
+             parent.depth + 1 AS depth,
+             ROW_NUMBER() OVER (PARTITION BY child.parent_id ORDER BY child.created_at ASC) AS child_ordinal
+           FROM nodes child
+           JOIN topic_tree parent ON child.parent_id = parent.id
+           LEFT JOIN users u ON u.id = child.author_id
+           WHERE child.topic_id = $1
+             AND child.status = 'ACTIVE'
+             AND parent.depth < ${depthParamIndex}
+         ),
+         bounded_tree AS (
+           SELECT * FROM topic_tree
+           WHERE child_ordinal <= ${limitParamIndex}
+           LIMIT ${capParamIndex}
+         )
+         SELECT
+           bt.*,
+           EXISTS (
+             SELECT 1 FROM nodes extra
+             WHERE extra.parent_id = bt.id AND extra.status = 'ACTIVE'
+             LIMIT 1 OFFSET ${limitParamIndex}
+           ) AS has_more_children
+         FROM bounded_tree bt
+         ORDER BY bt.depth ASC, bt.created_at ASC;`,
+        queryParams
+      );
+
+      baseGraph = {
+        nodes: nodesResult.rows.map((row) => rowToNode(row, undefined)),
+      };
+
+      await setCached(baseCacheKey, baseGraph, 30, topicId);
     }
 
-    const depthParamIndex = fromNodeId ? '$4' : '$3';
-    const limitParamIndex = fromNodeId ? '$5' : '$4';
-    const capParamIndex = fromNodeId ? '$6' : '$5';
+    if (!currentUserId) {
+      return baseGraph.nodes;
+    }
 
-    const nodesResult = await db.query(
-      `WITH RECURSIVE topic_tree AS (
-         SELECT
-           n.id, n.parent_id, n.author_id, u.username AS author_username,
-           n.edge_type, n.pos_x, n.pos_y, n.content,
-           n.support_score, n.contest_score, n.is_steel, n.created_at,
-           1 AS depth, 1::bigint AS child_ordinal
-         FROM nodes n
-         LEFT JOIN users u ON u.id = n.author_id
-         ${rootAnchorClause}
-
-         UNION ALL
-
-         SELECT
-           child.id, child.parent_id, child.author_id, u.username AS author_username,
-           child.edge_type, child.pos_x, child.pos_y, child.content,
-           child.support_score, child.contest_score, child.is_steel, child.created_at,
-           parent.depth + 1 AS depth,
-           ROW_NUMBER() OVER (PARTITION BY child.parent_id ORDER BY child.created_at ASC) AS child_ordinal
-         FROM nodes child
-         JOIN topic_tree parent ON child.parent_id = parent.id
-         LEFT JOIN users u ON u.id = child.author_id
-         WHERE child.topic_id = $1
-           AND child.status = 'ACTIVE'
-           AND parent.depth < ${depthParamIndex}
-       ),
-       bounded_tree AS (
-         SELECT * FROM topic_tree
-         WHERE child_ordinal <= ${limitParamIndex}
-         LIMIT ${capParamIndex}
-       )
-       SELECT
-         bt.*,
-         EXISTS (
-           SELECT 1 FROM nodes extra
-           WHERE extra.parent_id = bt.id AND extra.status = 'ACTIVE'
-           LIMIT 1 OFFSET ${limitParamIndex}
-         ) AS has_more_children
-       FROM bounded_tree bt
-       ORDER BY bt.depth ASC, bt.created_at ASC;`,
-      queryParams
+    const userVotesResult = await db.query<{ node_id: string; vote_type: string }>(
+      `SELECT v.node_id, v.vote_type
+       FROM votes v
+       JOIN nodes n ON n.id = v.node_id
+       WHERE v.user_id = $1 AND n.topic_id = $2`,
+      [currentUserId, topicId]
     );
 
-    baseGraph = {
-      nodes: nodesResult.rows.map((row) => rowToNode(row, undefined)),
-    };
+    const userVoteMap = new Map<string, 'support' | 'contest'>();
+    for (const row of userVotesResult.rows) {
+      userVoteMap.set(row.node_id, row.vote_type.toLowerCase() as 'support' | 'contest');
+    }
 
-    await setCached(baseCacheKey, baseGraph, 30, topicId);
+    return baseGraph.nodes.map((node) => ({
+      ...node,
+      userVote: userVoteMap.get(node.id) || null,
+    }));
+  } catch (err) {
+    if (process.env.NODE_ENV === 'development') {
+      return MOCK_NODES;
+    }
+    throw err;
   }
-
-  if (!currentUserId) {
-    return baseGraph.nodes;
-  }
-
-  const userVotesResult = await db.query<{ node_id: string; vote_type: string }>(
-    `SELECT v.node_id, v.vote_type
-     FROM votes v
-     JOIN nodes n ON n.id = v.node_id
-     WHERE v.user_id = $1 AND n.topic_id = $2`,
-    [currentUserId, topicId]
-  );
-
-  const userVoteMap = new Map<string, 'support' | 'contest'>();
-  for (const row of userVotesResult.rows) {
-    userVoteMap.set(row.node_id, row.vote_type.toLowerCase() as 'support' | 'contest');
-  }
-
-  return baseGraph.nodes.map((node) => ({
-    ...node,
-    userVote: userVoteMap.get(node.id) || null,
-  }));
 }
 
 export async function getTopicFlatNodes(topicId: string): Promise<ClaimNode[]> {

@@ -75,7 +75,7 @@ export function exportGraphAsMarkdown(topic: Topic) {
     for (const child of children) {
       const typeTag = child.edgeType.toUpperCase();
       const standing = child.steel ? ' [STEELMAN]' : '';
-      lines.push(`${indent}- **[${typeTag}]** ${child.content}${standing} (👍 ${child.support} | 👎 ${child.contest})`);
+      lines.push(`${indent}- **[${typeTag}]** ${child.content}${standing} (+${child.support} / -${child.contest})`);
       renderTree(child.id, depth + 1);
     }
   }

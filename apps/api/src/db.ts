@@ -78,7 +78,7 @@ export async function withUserSession<T>(
   }
 }
 
-export async function testConnection(maxRetries = 5, initialDelayMs = 1000): Promise<void> {
+export async function testConnection(maxRetries = process.env.NODE_ENV === 'development' ? 1 : 5, initialDelayMs = 500): Promise<void> {
   let delay = initialDelayMs;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -93,7 +93,11 @@ export async function testConnection(maxRetries = 5, initialDelayMs = 1000): Pro
     } catch (err) {
       if (attempt === maxRetries) {
         process.stderr.write(`[DB] Connection failed after ${maxRetries} attempts: ${err instanceof Error ? err.message : String(err)}\n`);
-        throw err;
+        if (process.env.NODE_ENV !== 'development') {
+          throw err;
+        }
+        process.stderr.write('[DB] Running in development mode without active database — mock mode enabled.\n');
+        return;
       }
       process.stdout.write(`[DB] Connection attempt ${attempt}/${maxRetries} failed. Retrying in ${delay}ms...\n`);
       await new Promise((resolve) => setTimeout(resolve, delay));

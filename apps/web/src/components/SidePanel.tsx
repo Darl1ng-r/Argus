@@ -117,7 +117,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 fontWeight: 600
               }}
             >
-              🔗 Share
+              Share
             </button>
           )}
 
@@ -137,7 +137,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 fontWeight: 600
               }}
             >
-              ✏️ Edit
+              Edit
             </button>
           )}
 
@@ -157,7 +157,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 fontWeight: 600
               }}
             >
-              🗑️ Delete
+              Delete
             </button>
           )}
         </div>

@@ -66,38 +66,51 @@ export async function getOrCreateUser(
   const inputId = userIdOrClerkId.trim();
   const isClerkId = inputId.startsWith('user_');
 
-  const existing = await db.query<User>(
-    'SELECT id, clerk_id AS "clerkId", username, email, reputation FROM users WHERE id = $1 OR clerk_id = $1',
-    [inputId]
-  );
-
-  if (existing.rowCount! > 0) {
-    return existing.rows[0];
-  }
-
-  const name =
-    username ||
-    (inputId === 'system-user-0000-0000-000000000000' ? 'system' : `User_${inputId.slice(-6)}`);
-  const userEmail =
-    email || `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}@argus.local`;
-
-  let created;
-  if (isClerkId) {
-    created = await db.query<User>(
-      `INSERT INTO users (clerk_id, username, email, reputation)
-       VALUES ($1, $2, $3, 10)
-       RETURNING id, clerk_id AS "clerkId", username, email, reputation`,
-      [inputId, name, userEmail]
+  try {
+    const existing = await db.query<User>(
+      'SELECT id, clerk_id AS "clerkId", username, email, reputation FROM users WHERE id = $1 OR clerk_id = $1',
+      [inputId]
     );
-  } else {
-    created = await db.query<User>(
-      `INSERT INTO users (id, username, email, reputation)
-       VALUES ($1, $2, $3, 10)
-       ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username
-       RETURNING id, clerk_id AS "clerkId", username, email, reputation`,
-      [inputId, name, userEmail]
-    );
-  }
 
-  return created.rows[0];
+    if (existing.rowCount! > 0) {
+      return existing.rows[0];
+    }
+
+    const name =
+      username ||
+      (inputId === 'system-user-0000-0000-000000000000' ? 'system' : `User_${inputId.slice(-6)}`);
+    const userEmail =
+      email || `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}@argus.local`;
+
+    let created;
+    if (isClerkId) {
+      created = await db.query<User>(
+        `INSERT INTO users (clerk_id, username, email, reputation)
+         VALUES ($1, $2, $3, 10)
+         RETURNING id, clerk_id AS "clerkId", username, email, reputation`,
+        [inputId, name, userEmail]
+      );
+    } else {
+      created = await db.query<User>(
+        `INSERT INTO users (id, username, email, reputation)
+         VALUES ($1, $2, $3, 10)
+         ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username
+         RETURNING id, clerk_id AS "clerkId", username, email, reputation`,
+        [inputId, name, userEmail]
+      );
+    }
+
+    return created.rows[0];
+  } catch (err) {
+    if (process.env.NODE_ENV === 'development') {
+      const name = username || `User_${inputId.slice(-6)}`;
+      return {
+        id: inputId,
+        username: name,
+        email: email || `${name.toLowerCase()}@argus.local`,
+        reputation: 10,
+      };
+    }
+    throw err;
+  }
 }

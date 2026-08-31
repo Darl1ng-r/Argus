@@ -73,7 +73,6 @@ export const NodeSearchModal: React.FC<NodeSearchModalProps> = ({
             background: 'var(--marble-panel, #F8F4ED)',
           }}
         >
-          <span style={{ fontSize: '16px', color: 'var(--parchment, #A89070)' }}>🔍</span>
           <input
             ref={inputRef}
             type="text"

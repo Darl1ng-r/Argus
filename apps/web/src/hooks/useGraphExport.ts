@@ -16,7 +16,7 @@ export function useGraphExport({ topic, cyInstance, onToast }: UseGraphExportOpt
 
       if (format === 'markdown') {
         exportGraphAsMarkdown(topic);
-        onToast('📝 Markdown outline exported successfully.', 'success');
+        onToast('Markdown outline exported successfully.', 'success');
         return;
       }
 
@@ -27,10 +27,10 @@ export function useGraphExport({ topic, cyInstance, onToast }: UseGraphExportOpt
 
       if (format === 'png') {
         exportGraphAsPNG(cyInstance, topic.title);
-        onToast('🖼️ High-resolution PNG graph image exported.', 'success');
+        onToast('High-resolution PNG graph image exported.', 'success');
       } else if (format === 'svg') {
         exportGraphAsSVG(cyInstance, topic.title);
-        onToast('📐 Vector graph image exported.', 'success');
+        onToast('Vector graph image exported.', 'success');
       }
     },
     [topic, cyInstance, onToast]

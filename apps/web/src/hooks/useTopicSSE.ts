@@ -35,7 +35,7 @@ export function useTopicSSE({
       try {
         const newNode: ClaimNode = JSON.parse(e.data);
         onNodeAdded?.(newNode);
-        onToast?.('⚡ Live: New claim added to graph.', 'info');
+        onToast?.('Live: New claim added to graph.', 'info');
       } catch (err) {
         console.error('Failed to parse SSE node_added payload', err);
       }
@@ -54,7 +54,7 @@ export function useTopicSSE({
       try {
         const updatedNode: ClaimNode = JSON.parse(e.data);
         onNodeUpdated?.(updatedNode);
-        onToast?.('⚡ Live: A claim was edited.', 'info');
+        onToast?.('Live: A claim was edited.', 'info');
       } catch (err) {
         console.error('Failed to parse SSE node_updated payload', err);
       }
@@ -64,7 +64,7 @@ export function useTopicSSE({
       try {
         const payload: { nodeId: string } = JSON.parse(e.data);
         onNodeDeleted?.(payload.nodeId);
-        onToast?.('⚡ Live: A claim was removed.', 'info');
+        onToast?.('Live: A claim was removed.', 'info');
       } catch (err) {
         console.error('Failed to parse SSE node_deleted payload', err);
       }
@@ -74,7 +74,7 @@ export function useTopicSSE({
       try {
         const updatedRoot: ClaimNode = JSON.parse(e.data);
         onRootUpdated?.(updatedRoot);
-        onToast?.('⚡ Live: Topic root claim updated.', 'info');
+        onToast?.('Live: Topic root claim updated.', 'info');
       } catch (err) {
         console.error('Failed to parse SSE root_updated payload', err);
       }
