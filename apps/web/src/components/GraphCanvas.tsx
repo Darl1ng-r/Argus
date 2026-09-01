@@ -302,15 +302,24 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         const sel = cy.getElementById(selectedId);
         if (sel.length > 0) {
           sel.select();
-          cy.animate({
-            center: { eles: sel },
-            zoom: Math.max(cy.zoom(), 0.95),
-            duration: 350,
-          });
         }
       }
     });
   }, [nodes, selectedId, viewMode]);
+
+  // Smooth focus animation only when user selection ID changes
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy || !selectedId) return;
+    const sel = cy.getElementById(selectedId);
+    if (sel.length > 0) {
+      cy.animate({
+        center: { eles: sel },
+        zoom: Math.max(cy.zoom(), 0.95),
+        duration: 250,
+      });
+    }
+  }, [selectedId]);
 
   // Run Dagre Layout auto-positioning
   const handleAutoLayout = () => {

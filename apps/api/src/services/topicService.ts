@@ -2,7 +2,7 @@ import { db } from '../db.js';
 import { Topic, TopicSummary, PaginatedTopics, ClaimNode, User } from './graphTypes.js';
 import { rowToNode } from './nodeService.js';
 import { getOrCreateUser } from './userService.js';
-import { getCached, setCached, invalidateTopicCache } from '../redis.js';
+import { getCached, setCached, invalidateTopicCache, invalidateCacheTag } from '../redis.js';
 import { emitTopicMutation } from './topicEvents.js';
 import { createNotification } from './notificationService.js';
 import { ValidationError } from '../utils/sanitizer.js';
@@ -59,6 +59,7 @@ export async function createTopic(
     );
 
     await client.query('COMMIT');
+    await invalidateCacheTag('topics_list');
 
     const rootNode: ClaimNode = {
       id: rootNodeId,
@@ -176,6 +177,12 @@ export async function getAllTopics(
   limit = 20,
   cursor?: string
 ): Promise<PaginatedTopics> {
+  const cacheKey = `topics_list:p${page}:l${limit}:c${cursor || 'none'}`;
+  const cached = await getCached<PaginatedTopics>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   try {
     const fetchLimit = limit + 1;
 
@@ -229,7 +236,9 @@ export async function getAllTopics(
       const lastTopic = topics[topics.length - 1];
       const nextCursor = hasMore && lastTopic ? encodeCursor(lastTopic.createdAt, lastTopic.id) : null;
 
-      return { topics, total: topics.length, page, limit, nextCursor, hasMore };
+      const result: PaginatedTopics = { topics, total: topics.length, page, limit, nextCursor, hasMore };
+      await setCached(cacheKey, result, 30, 'topics_list');
+      return result;
     }
 
     const offset = Math.max(0, (page - 1) * limit);
@@ -273,7 +282,7 @@ export async function getAllTopics(
     const lastTopic = topics[topics.length - 1];
     const nextCursor = hasMore && lastTopic ? encodeCursor(lastTopic.createdAt, lastTopic.id) : null;
 
-    return {
+    const result: PaginatedTopics = {
       topics,
       total: topics.length,
       page,
@@ -281,6 +290,8 @@ export async function getAllTopics(
       nextCursor,
       hasMore,
     };
+    await setCached(cacheKey, result, 30, 'topics_list');
+    return result;
   } catch (err) {
     if (process.env.NODE_ENV === 'development') {
       return { topics: MOCK_TOPICS, total: MOCK_TOPICS.length, page: 1, limit: 20, nextCursor: null, hasMore: false };
@@ -601,6 +612,7 @@ export async function forkTopic(topicId: string, user: User): Promise<Topic> {
     await client.query('UPDATE topics SET fork_count = fork_count + 1 WHERE id = $1', [topicId]);
 
     await client.query('COMMIT');
+    await invalidateCacheTag('topics_list');
 
     const newNodes = await getTopicSubgraph(newTopicId, user.id);
 
@@ -637,6 +649,7 @@ export async function deleteTopic(topicId: string): Promise<{ topicId: string; s
   const res = await db.query('DELETE FROM topics WHERE id = $1 RETURNING id', [topicId]);
   if (res.rowCount === 0) throw new ValidationError(`Topic not found: ${topicId}`);
   await invalidateTopicCache(topicId);
+  await invalidateCacheTag('topics_list');
   emitTopicMutation(topicId, 'topic_deleted', { topicId });
   return { topicId, status: 'DELETED' };
 }

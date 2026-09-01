@@ -66,7 +66,14 @@ if (REDIS_URL && process.env.NODE_ENV !== 'test') {
 
         return result;
       },
-      { connection }
+      {
+        connection,
+        concurrency: 5,
+        limiter: {
+          max: 10,
+          duration: 60_000,
+        },
+      }
     );
 
     aiWorker.on('failed', (job, err) => {
@@ -86,7 +93,16 @@ export async function enqueueAIAnalysis(
   userId?: string
 ): Promise<{ jobId: string; status: 'queued' | 'completed'; result?: AIAnalysisResult }> {
   if (aiQueue && process.env.NODE_ENV !== 'test') {
-    const job = await aiQueue.add('analyze-topic', { topicId, userId });
+    const job = await aiQueue.add(
+      'analyze-topic',
+      { topicId, userId },
+      {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
+        removeOnComplete: 100,
+        removeOnFail: 200,
+      }
+    );
     return {
       jobId: job.id || `job-${Date.now()}`,
       status: 'queued',

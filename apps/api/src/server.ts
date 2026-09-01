@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import compression from 'compression';
 import pinoHttp from 'pino-http';
 import pino from 'pino';
 import { verifyToken } from '@clerk/backend';
@@ -139,6 +140,7 @@ app.use(
   })
 );
 
+app.use(compression());
 app.use(express.json({ limit: '50kb' }));
 
 // -----------------------------------------------------------------------

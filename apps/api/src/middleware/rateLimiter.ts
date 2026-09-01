@@ -26,23 +26,27 @@ export const globalLimiter = rateLimit({
   message: { error: 'Too many requests. Please slow down.' },
 });
 
-/** Applied to state-mutating endpoints (create/update/fork). */
+/** Applied to state-mutating endpoints (create/update/fork) — keyed per user. */
 export const mutationLimiter = rateLimit({
-  windowMs: 60_000,
-  max: 15,
-  standardHeaders: true,
-  legacyHeaders: false,
-  store: makeStore(),
-  message: { error: 'Too many submissions. Please wait a minute before trying again.' },
-});
-
-/** Applied to voting endpoints. */
-export const voteLimiter = rateLimit({
   windowMs: 60_000,
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
   store: makeStore(),
+  keyGenerator: (req) => req.user?.id || req.ip || 'unknown',
+  validate: { keyGeneratorIpFallback: false },
+  message: { error: 'Too many submissions. Please wait a minute before trying again.' },
+});
+
+/** Applied to voting endpoints — keyed per user. */
+export const voteLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: makeStore(),
+  keyGenerator: (req) => req.user?.id || req.ip || 'unknown',
+  validate: { keyGeneratorIpFallback: false },
   message: { error: 'Voting speed limit exceeded. Please wait before voting again.' },
 });
 

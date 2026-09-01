@@ -43,6 +43,30 @@ export const activeSseConnectionsGauge = new client.Gauge({
   help: 'Number of active live SSE streaming connections',
 });
 
+/** Gauge tracking PostgreSQL connection pool total clients. */
+export const dbPoolTotalGauge = new client.Gauge({
+  name: 'argus_db_pool_total_clients',
+  help: 'Total number of active and idle PostgreSQL pool clients',
+});
+
+/** Gauge tracking PostgreSQL connection pool idle clients. */
+export const dbPoolIdleGauge = new client.Gauge({
+  name: 'argus_db_pool_idle_clients',
+  help: 'Number of idle PostgreSQL pool clients',
+});
+
+/** Gauge tracking PostgreSQL connection pool waiting requests. */
+export const dbPoolWaitingGauge = new client.Gauge({
+  name: 'argus_db_pool_waiting_requests',
+  help: 'Number of queued requests waiting for a database connection',
+});
+
+export function updateDbPoolMetrics(pool: { totalCount: number; idleCount: number; waitingCount: number }): void {
+  dbPoolTotalGauge.set(pool.totalCount || 0);
+  dbPoolIdleGauge.set(pool.idleCount || 0);
+  dbPoolWaitingGauge.set(pool.waitingCount || 0);
+}
+
 /**
  * Express middleware to automatically track HTTP request duration and count metrics.
  */
@@ -66,6 +90,14 @@ export function metricsMiddleware(req: Request, res: Response, next: NextFunctio
  * Returns formatted Prometheus metrics text representation for /metrics endpoint.
  */
 export async function getPrometheusMetrics(): Promise<string> {
+  try {
+    const { db } = await import('../db.js');
+    if (db) {
+      updateDbPoolMetrics(db);
+    }
+  } catch {
+    // Ignore if db is not ready
+  }
   return client.register.metrics();
 }
 

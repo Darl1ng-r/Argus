@@ -21,6 +21,7 @@ import { Redis } from 'ioredis';
 import { topicEvents, TopicMutationEvent, topicPubSubChannel } from '../services/topicEvents.js';
 import { validateIdentifier, ValidationError } from '../utils/sanitizer.js';
 import { sendError } from '../middleware/index.js';
+import { activeSseConnectionsGauge } from '../utils/metrics.js';
 
 // ---------------------------------------------------------------------------
 // Shared Redis multiplexer — one subscriber per topic, many SSE clients
@@ -100,10 +101,19 @@ async function subscribeToTopicRedis(
 // Connection tracking
 // ---------------------------------------------------------------------------
 const openConnections = new Map<string, number>();
+const ipConnections = new Map<string, number>();
+const MAX_SSE_PER_IP = 25;
 
 export async function topicSseHandler(req: Request, res: Response): Promise<void> {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
+    const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+
+    const currentIpCount = ipConnections.get(clientIp) ?? 0;
+    if (currentIpCount >= MAX_SSE_PER_IP) {
+      res.status(429).json({ error: 'Too many concurrent real-time connections from this IP. Please close unused tabs.' });
+      return;
+    }
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -112,6 +122,8 @@ export async function topicSseHandler(req: Request, res: Response): Promise<void
     res.flushHeaders();
 
     openConnections.set(topicId, (openConnections.get(topicId) ?? 0) + 1);
+    ipConnections.set(clientIp, currentIpCount + 1);
+    activeSseConnectionsGauge.inc();
 
     let eventSeq = 0;
     function writeEvent(type: string, data: unknown): void {
@@ -144,6 +156,8 @@ export async function topicSseHandler(req: Request, res: Response): Promise<void
       topicEvents.removeListener(localChannel, onLocalMutation);
       await unsubscribeRedis();
       openConnections.set(topicId, Math.max(0, (openConnections.get(topicId) ?? 1) - 1));
+      ipConnections.set(clientIp, Math.max(0, (ipConnections.get(clientIp) ?? 1) - 1));
+      activeSseConnectionsGauge.dec();
       if (!res.writableEnded) res.end();
     });
   } catch (err) {

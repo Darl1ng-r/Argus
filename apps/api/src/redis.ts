@@ -43,17 +43,20 @@ export async function setCached(
   key: string,
   data: unknown,
   ttlSeconds = 30,
-  topicId?: string
+  tagOrTopicId?: string
 ): Promise<void> {
   if (!redisClient) return;
   try {
     const pipeline = redisClient.pipeline();
     pipeline.setex(key, ttlSeconds, JSON.stringify(data));
-    if (topicId) {
-      // Track this key under the topic's tag set so invalidation never needs SCAN
-      const tagKey = `cache-tag:topic:${topicId}`;
+    if (tagOrTopicId) {
+      // Track this key under the tag set so invalidation never needs SCAN
+      const tagKey = tagOrTopicId.startsWith('cache-tag:')
+        ? tagOrTopicId
+        : tagOrTopicId.startsWith('topic:')
+        ? `cache-tag:${tagOrTopicId}`
+        : `cache-tag:topic:${tagOrTopicId}`;
       pipeline.sadd(tagKey, key);
-      // Tag set TTL = cache TTL + 60s buffer so it outlives the cached value
       pipeline.expire(tagKey, ttlSeconds + 60);
     }
     await pipeline.exec();
@@ -63,23 +66,29 @@ export async function setCached(
 }
 
 /**
- * Fix P-3: Invalidates all cached subgraphs for a specific topic ID.
- * Uses a Redis Set (cache-tag:topic:{topicId}) instead of SCAN to avoid O(keyspace) cost.
+ * Invalidates all cached keys under a specific tag set.
  */
-export async function invalidateTopicCache(topicId: string): Promise<void> {
+export async function invalidateCacheTag(tag: string): Promise<void> {
   if (!redisClient) return;
   try {
-    const tagKey = `cache-tag:topic:${topicId}`;
+    const tagKey = tag.startsWith('cache-tag:') ? tag : `cache-tag:${tag}`;
     const keys = await redisClient.smembers(tagKey);
     if (keys.length > 0) {
       const pipeline = redisClient.pipeline();
       pipeline.del(...keys);
-      pipeline.del(tagKey); // Remove the tag set itself
+      pipeline.del(tagKey);
       await pipeline.exec();
     }
   } catch (err) {
-    // Ignore cache invalidation errors — stale data will expire naturally
+    // Ignore cache invalidation errors
   }
+}
+
+/**
+ * Invalidates all cached subgraphs for a specific topic ID.
+ */
+export async function invalidateTopicCache(topicId: string): Promise<void> {
+  await invalidateCacheTag(`topic:${topicId}`);
 }
 
 
