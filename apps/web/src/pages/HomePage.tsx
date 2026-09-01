@@ -16,10 +16,10 @@ export interface TopicSummary {
 
 interface HomePageProps {
   user: User | null;
-  onSwitchUser: () => void;
+  onUserChanged: () => void;
 }
 
-export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
+export const HomePage: React.FC<HomePageProps> = ({ user, onUserChanged }) => {
   const [topics, setTopics] = useState<TopicSummary[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -30,6 +30,7 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
   const [formError, setFormError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalTab, setAuthModalTab] = useState<'signin' | 'register' | 'profile'>('signin');
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -38,7 +39,8 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
 
   const handleStartDebateClick = () => {
     if (!user) {
-      setAuthNotice('Authentication required: Please sign in or create an account to start a debate.');
+      setAuthNotice('Sign in or create an account to start a debate.');
+      setAuthModalTab('signin');
       setIsAuthModalOpen(true);
       return;
     }
@@ -48,7 +50,8 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
 
   const handleDebateCardClick = (topicId: string) => {
     if (!user) {
-      setAuthNotice('Authentication required: Please sign in or create an account to view and participate in debates.');
+      setAuthNotice('Sign in or create an account to view and participate in debates.');
+      setAuthModalTab('signin');
       setIsAuthModalOpen(true);
       return;
     }
@@ -135,7 +138,7 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
           <span className="tag">Ratio, in the open.</span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <button
             className="fork-btn"
             onClick={handleStartDebateClick}
@@ -145,9 +148,11 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
           </button>
 
           {user ? (
+            /* Profile chip — shown when authenticated */
             <button
-              onClick={() => setIsAuthModalOpen(true)}
-              title="Click to open Authentication & Profile settings"
+              id="profile-btn"
+              onClick={() => { setAuthModalTab('profile'); setIsAuthModalOpen(true); }}
+              title="View profile & sign out"
               style={{
                 fontFamily: 'Inter, sans-serif',
                 fontSize: '11px',
@@ -155,34 +160,63 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
                 background: 'var(--marble-panel)',
                 color: 'var(--ink)',
                 border: '1px solid var(--marble-line)',
-                padding: '6px 12px',
+                padding: '5px 12px 5px 6px',
                 borderRadius: '20px',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px'
+                gap: '7px',
               }}
             >
-              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--laurel)' }}></span>
+              {/* Avatar initial */}
+              <span style={{
+                width: '22px', height: '22px', borderRadius: '50%',
+                background: 'linear-gradient(135deg, var(--gold, #B8892B), #D4AF37)',
+                color: '#FFFDF8', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: 'Cinzel, serif', fontSize: '10px', fontWeight: 700,
+              }}>
+                {(user.username || 'U')[0].toUpperCase()}
+              </span>
               @{user.username}
             </button>
           ) : (
-            <button
-              onClick={() => setIsAuthModalOpen(true)}
-              style={{
-                fontFamily: 'Inter, sans-serif',
-                fontSize: '11px',
-                fontWeight: 600,
-                background: 'var(--gold)',
-                color: '#FFFDF8',
-                border: 'none',
-                padding: '6px 14px',
-                borderRadius: '20px',
-                cursor: 'pointer',
-              }}
-            >
-              Sign In / Profile
-            </button>
+            /* Log In + Sign Up — shown when unauthenticated */
+            <>
+              <button
+                id="login-btn"
+                onClick={() => { setAuthModalTab('signin'); setAuthNotice(null); setIsAuthModalOpen(true); }}
+                style={{
+                  fontFamily: 'Inter, sans-serif',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  background: 'transparent',
+                  color: 'var(--ink)',
+                  border: '1px solid var(--marble-line)',
+                  padding: '6px 14px',
+                  borderRadius: '20px',
+                  cursor: 'pointer',
+                }}
+              >
+                Log In
+              </button>
+              <button
+                id="signup-btn"
+                onClick={() => { setAuthModalTab('register'); setAuthNotice(null); setIsAuthModalOpen(true); }}
+                style={{
+                  fontFamily: 'Inter, sans-serif',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  background: 'var(--gold)',
+                  color: '#FFFDF8',
+                  border: 'none',
+                  padding: '6px 14px',
+                  borderRadius: '20px',
+                  cursor: 'pointer',
+                }}
+              >
+                Sign Up
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -466,12 +500,13 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onSwitchUser }) => {
       <AuthModal
         isOpen={isAuthModalOpen}
         user={user}
+        initialTab={authModalTab}
         noticeMessage={authNotice}
         onClose={() => {
           setIsAuthModalOpen(false);
           setAuthNotice(null);
         }}
-        onUserChanged={onSwitchUser}
+        onUserChanged={onUserChanged}
       />
     </div>
   );

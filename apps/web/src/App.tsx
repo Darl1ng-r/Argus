@@ -1,11 +1,11 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import React, { useState, useEffect, lazy, Suspense, useCallback } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { User } from './types';
-import { getDevUserCredentials, switchDevUser, apiFetch } from './utils/auth';
+import { getAuthToken, apiFetch } from './utils/auth';
 
 // Fix #17 — Code splitting: TopicPage (+ Cytoscape.js ~500KB) is loaded lazily
 // only when the user navigates to a topic route.
@@ -47,45 +47,62 @@ function GraphLoadingFallback() {
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
-  useEffect(() => {
-    const creds = getDevUserCredentials();
-    fetchUserProfile();
-  }, []);
-
-  const fetchUserProfile = async () => {
+  const fetchUserProfile = useCallback(async () => {
+    if (!getAuthToken()) {
+      setCurrentUser(null);
+      setAuthLoading(false);
+      return;
+    }
     try {
       const res = await apiFetch('/api/me');
       if (res.ok) {
         const u: User = await res.json();
         setCurrentUser(u);
+      } else {
+        setCurrentUser(null);
       }
-    } catch (err) {
-      console.error('Failed to fetch user profile', err);
+    } catch {
+      setCurrentUser(null);
+    } finally {
+      setAuthLoading(false);
     }
-  };
+  }, []);
 
-  const handleSwitchUser = () => {
-    switchDevUser();
+  useEffect(() => {
     fetchUserProfile();
-  };
+  }, [fetchUserProfile]);
+
+  // Callback passed to pages/modals — refreshes user state after auth changes
+  const handleUserChanged = useCallback(() => {
+    fetchUserProfile();
+  }, [fetchUserProfile]);
+
+  if (authLoading) {
+    return <GraphLoadingFallback />;
+  }
 
   return (
     <Router>
       <Suspense fallback={<GraphLoadingFallback />}>
         <Routes>
-          <Route path="/" element={<HomePage user={currentUser} onSwitchUser={handleSwitchUser} />} />
-          <Route path="/login" element={<LoginPage onLoginSuccess={() => fetchUserProfile()} />} />
-          <Route path="/register" element={<RegisterPage onRegisterSuccess={() => fetchUserProfile()} />} />
+          <Route path="/" element={<HomePage user={currentUser} onUserChanged={handleUserChanged} />} />
+          <Route path="/login" element={<LoginPage onLoginSuccess={handleUserChanged} />} />
+          <Route path="/register" element={<RegisterPage onRegisterSuccess={handleUserChanged} />} />
           <Route path="/forgot-password" element={<ResetPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route
             path="/t/:topicId"
-            element={<TopicPage currentUser={currentUser} onSwitchUser={handleSwitchUser} />}
+            element={
+              currentUser
+                ? <TopicPage currentUser={currentUser} onSwitchUser={handleUserChanged} />
+                : <Navigate to="/" replace state={{ requireAuth: true }} />
+            }
           />
           <Route
             path="*"
-            element={<HomePage user={currentUser} onSwitchUser={handleSwitchUser} />}
+            element={<HomePage user={currentUser} onUserChanged={handleUserChanged} />}
           />
         </Routes>
       </Suspense>

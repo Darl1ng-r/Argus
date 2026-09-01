@@ -149,14 +149,14 @@ app.use(async (req: Request, _res: Response, next: NextFunction) => {
     let resolvedUsername: string | undefined;
     let resolvedEmail: string | undefined;
 
-    // Clerk JWT path
     if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
       const token = authHeader.replace('Bearer ', '').trim();
+
+      // ── 1. Try Clerk JWT (production SSO) ──────────────────────────
       const secretKey = process.env.CLERK_SECRET_KEY;
-      if (secretKey) {
+      if (secretKey && !resolvedId) {
         try {
           const payload = await verifyToken(token, { secretKey });
-          // Fix 5: validate sub format before it reaches the DB layer
           if (payload?.sub) {
             const { validateIdentifier } = await import('./utils/sanitizer.js');
             try {
@@ -165,15 +165,36 @@ app.use(async (req: Request, _res: Response, next: NextFunction) => {
               req.log.warn({ sub: payload.sub }, '[AUTH] JWT sub failed identifier validation — ignoring');
             }
           }
-        } catch (err) {
-          if (IS_PRODUCTION) {
-            req.log.warn({ err }, '[AUTH] Invalid JWT token');
+        } catch {
+          // Not a valid Clerk token — fall through to native JWT
+        }
+      }
+
+      // ── 2. Try our own native JWT (bcrypt + jsonwebtoken) ──────────
+      if (!resolvedId) {
+        try {
+          // Skip dev session tokens from the old fake auth system
+          if (!token.startsWith('dev_session_')) {
+            const { verifyArgusToken, isTokenBlacklisted } = await import('./utils/jwt.js');
+            const payload = verifyArgusToken(token);
+            if (payload?.sub) {
+              // Reject if the token has been explicitly logged out
+              const blacklisted = await isTokenBlacklisted(payload.jti);
+              if (!blacklisted) {
+                resolvedId = payload.sub;
+                resolvedUsername = payload.username;
+              } else {
+                req.log.warn({ jti: payload.jti }, '[AUTH] Blacklisted token rejected');
+              }
+            }
           }
+        } catch {
+          // Not a valid native JWT — leave resolvedId undefined
         }
       }
     }
 
-    // Dev auth path (only when ALLOW_DEV_AUTH=true and explicitly not production)
+    // ── 3. Dev header auth (ALLOW_DEV_AUTH only, never in production) ─
     if (!resolvedId && ALLOW_DEV_AUTH) {
       const customUserId = req.headers['x-user-id'];
       const customUserName = req.headers['x-user-name'];
