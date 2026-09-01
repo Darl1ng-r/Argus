@@ -63,6 +63,8 @@ export interface User {
   username: string;
   email: string;
   reputation: number;
+  isActive?: boolean;
+  anonymizedAt?: string | null;
 }
 
 export type TopicRole = 'owner' | 'contributor' | 'viewer';

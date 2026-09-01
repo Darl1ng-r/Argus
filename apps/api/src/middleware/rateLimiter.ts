@@ -7,13 +7,13 @@ import { RedisStore } from 'rate-limit-redis';
 import { redisClient } from '../redis.js';
 
 function makeStore() {
-  if (redisClient && redisClient.status === 'ready' && process.env.NODE_ENV !== 'test') {
+  if (redisClient && process.env.NODE_ENV !== 'test') {
     return new RedisStore({
       // @ts-expect-error — ioredis satisfies the interface
       sendCommand: (...args: string[]) => redisClient!.call(...args),
     });
   }
-  return undefined; // Memory store fallback (dev & offline testing)
+  return undefined; // Memory store fallback
 }
 
 /** Applied globally to every request (100 req/min per IP). */
@@ -46,14 +46,14 @@ export const voteLimiter = rateLimit({
   message: { error: 'Voting speed limit exceeded. Please wait before voting again.' },
 });
 
-/** Applied to Auth endpoints (Login, Reset Password) — 5 attempts per 10 minutes temporary lockout. */
+/** Applied to Auth endpoints (Login, Reset Password) — IP level throttling (25 attempts per 15 min). Account-level lockout is handled individually in auth service. */
 export const authBruteForceLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000, // 10 minutes
-  max: 5, // 5 attempts limit
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 25, // 25 attempts per IP
   standardHeaders: true,
   legacyHeaders: false,
   store: makeStore(),
   message: {
-    error: 'Too many failed authentication attempts. Account temporarily locked for 10 minutes to prevent brute force attacks. Please try again later.',
+    error: 'Too many authentication attempts from this IP address. Please wait 15 minutes before trying again.',
   },
 });

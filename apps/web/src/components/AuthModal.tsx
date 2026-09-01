@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { User } from '../types';
-import { setAuthToken, clearAuthToken, logout } from '../utils/auth';
+import { setAuthSession, logout, deactivateAccount } from '../utils/auth';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -27,12 +27,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     user ? 'profile' : (initialTab || 'signin')
   );
 
-  // Reset tab when user state or open state changes
+  // Reset tab when modal open state changes
   useEffect(() => {
     if (!isOpen) return;
     setActiveTab(user ? 'profile' : (initialTab || 'signin'));
     setErrorMsg(null);
     setSuccessMsg(null);
+    setIsDeactivating(false);
   }, [isOpen, user, initialTab]);
 
   // Sign In states
@@ -51,7 +52,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [devCode, setDevCode] = useState('');
   const [verifyCode, setVerifyCode] = useState('');
 
-  // General
+  // Deactivate state
+  const [isDeactivating, setIsDeactivating] = useState(false);
+
+  // General feedback
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -87,7 +91,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
-      setAuthToken(data.token);
+      setAuthSession(data.accessToken || data.token, data.refreshToken);
       onUserChanged();
       showSuccess(`Welcome back, @${data.user.username}!`);
       setTimeout(() => { onClose(); setSuccessMsg(null); }, 1000);
@@ -119,7 +123,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           email: regEmail.trim(),
           password: regPassword,
           confirmPassword: regConfirmPassword,
-          // Dev-mode fields to pass server validation
           termsAccepted: true,
           privacyAccepted: true,
           captchaToken: 'dev_bypass',
@@ -133,10 +136,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
-      // Switch to email verify step
       setPendingEmail(data.email);
       setDevCode(data.devCode || '');
-      setVerifyCode(data.devCode || ''); // Auto-fill in dev
+      setVerifyCode(data.devCode || '');
       setActiveTab('verify');
       setErrorMsg(null);
     } catch {
@@ -171,7 +173,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
-      setAuthToken(data.token);
+      setAuthSession(data.accessToken || data.token, data.refreshToken);
       onUserChanged();
       showSuccess(`Welcome to Argus, @${data.user.username}!`);
       setTimeout(() => { onClose(); setSuccessMsg(null); }, 1200);
@@ -196,7 +198,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setTimeout(() => { onClose(); setSuccessMsg(null); }, 900);
   };
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── GDPR Account Deactivation ──────────────────────────────────────────────
+
+  const handleDeactivate = async () => {
+    setLoading(true);
+    try {
+      const ok = await deactivateAccount();
+      if (ok) {
+        onUserChanged();
+        showSuccess('Account successfully deleted and data scrubbed in compliance with GDPR.');
+        setTimeout(() => { onClose(); setSuccessMsg(null); }, 1500);
+      } else {
+        showError('Failed to deactivate account. Please try again.');
+      }
+    } catch {
+      showError('An error occurred during account deactivation.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div
@@ -293,7 +313,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 {activeTab === 'profile' ? 'YOUR PROFILE' : 'ARGUS ACCESS'}
               </h2>
               <div style={{ fontFamily: 'Crimson Pro, serif', fontStyle: 'italic', fontSize: '13px', color: 'var(--ink-soft, #5B5348)', marginTop: '1px' }}>
-                {activeTab === 'profile' ? `Signed in as @${user?.username}` : 'Secure Authentication Gateway'}
+                {activeTab === 'profile' ? `@${user?.username}` : 'Security & Identity Gateway'}
               </div>
             </div>
           </div>
@@ -304,7 +324,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           }}>✕</button>
         </div>
 
-        {/* Tab Navigation (hidden on verify step) */}
+        {/* Tab Navigation */}
         {activeTab !== 'verify' && (
           <div style={{ display: 'flex', borderBottom: '1px solid var(--marble-line, #DED6C3)' }}>
             {!user && (
@@ -319,7 +339,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             )}
             {user && (
               <button className="auth-tab active" style={{ cursor: 'default' }}>
-                My Profile
+                Account Settings & Security
               </button>
             )}
           </div>
@@ -532,27 +552,78 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       ⭐ {user.reputation} rep
                     </span>
                     <span style={{ background: '#F0F4E8', border: '1px solid #C4D4A4', color: '#6E7B4A', fontFamily: 'Inter', fontSize: '11px', fontWeight: 600, padding: '3px 10px', borderRadius: '12px' }}>
-                      Active Session
+                      🛡️ Rotating Token Pair Active
                     </span>
                   </div>
                 </div>
               </div>
 
-              {/* Sign Out */}
-              <button
-                onClick={handleSignOut}
-                disabled={loading}
-                style={{
-                  background: '#FDF2F0', color: 'var(--oxide, #A2472E)',
-                  border: '1px solid var(--oxide, #A2472E)',
-                  fontFamily: 'Inter', fontSize: '13px', fontWeight: 600,
-                  padding: '11px 18px', borderRadius: '8px', cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
-                  width: '100%',
-                }}
-              >
-                {loading ? 'Signing Out…' : '→ Sign Out'}
-              </button>
+              {/* Actions */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <button
+                  onClick={handleSignOut}
+                  disabled={loading}
+                  style={{
+                    background: 'var(--marble-panel)', color: 'var(--ink)',
+                    border: '1px solid var(--marble-line)',
+                    fontFamily: 'Inter', fontSize: '13px', fontWeight: 600,
+                    padding: '11px 18px', borderRadius: '8px', cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                    width: '100%',
+                  }}
+                >
+                  {loading ? 'Signing Out…' : '→ Sign Out'}
+                </button>
+
+                {!isDeactivating ? (
+                  <button
+                    onClick={() => setIsDeactivating(true)}
+                    type="button"
+                    style={{
+                      background: 'transparent', color: 'var(--oxide, #A2472E)',
+                      border: '1px dashed rgba(162, 71, 46, 0.4)',
+                      fontFamily: 'Inter', fontSize: '12px', fontWeight: 500,
+                      padding: '8px 14px', borderRadius: '6px', cursor: 'pointer',
+                      marginTop: '8px',
+                    }}
+                  >
+                    Delete Account & Scrub Data (GDPR)
+                  </button>
+                ) : (
+                  <div style={{ background: '#FDF2F0', border: '1px solid #E8C5BE', borderRadius: '8px', padding: '14px', marginTop: '6px' }}>
+                    <div style={{ fontFamily: 'Cinzel, serif', fontSize: '12px', fontWeight: 700, color: 'var(--oxide)', marginBottom: '6px' }}>
+                      CONFIRM ACCOUNT DELETION
+                    </div>
+                    <p style={{ fontFamily: 'Inter', fontSize: '12px', color: 'var(--ink)', lineHeight: 1.45, margin: '0 0 12px' }}>
+                      In compliance with GDPR, your email and credentials will be permanently erased. Your argument steles will remain on the public marble as anonymous contributions.
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={handleDeactivate}
+                        disabled={loading}
+                        style={{
+                          flex: 1, background: 'var(--oxide, #A2472E)', color: '#FFFDF8',
+                          border: 'none', padding: '8px 12px', borderRadius: '6px',
+                          fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                        }}
+                      >
+                        {loading ? 'Scrubbing…' : 'Confirm Permanent Deletion'}
+                      </button>
+                      <button
+                        onClick={() => setIsDeactivating(false)}
+                        disabled={loading}
+                        style={{
+                          background: 'transparent', color: 'var(--ink)',
+                          border: '1px solid var(--marble-line)', padding: '8px 12px',
+                          borderRadius: '6px', fontSize: '12px', cursor: 'pointer',
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>

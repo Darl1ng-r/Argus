@@ -68,7 +68,7 @@ export async function getOrCreateUser(
 
   try {
     const existing = await db.query<User>(
-      'SELECT id, clerk_id AS "clerkId", username, email, reputation FROM users WHERE id = $1 OR clerk_id = $1',
+      'SELECT id, clerk_id AS "clerkId", username, email, reputation, is_active AS "isActive", anonymized_at AS "anonymizedAt" FROM users WHERE id = $1 OR clerk_id = $1',
       [inputId]
     );
 
@@ -85,17 +85,17 @@ export async function getOrCreateUser(
     let created;
     if (isClerkId) {
       created = await db.query<User>(
-        `INSERT INTO users (clerk_id, username, email, reputation)
-         VALUES ($1, $2, $3, 10)
-         RETURNING id, clerk_id AS "clerkId", username, email, reputation`,
+        `INSERT INTO users (clerk_id, username, email, reputation, is_active)
+         VALUES ($1, $2, $3, 10, TRUE)
+         RETURNING id, clerk_id AS "clerkId", username, email, reputation, is_active AS "isActive", anonymized_at AS "anonymizedAt"`,
         [inputId, name, userEmail]
       );
     } else {
       created = await db.query<User>(
-        `INSERT INTO users (id, username, email, reputation)
-         VALUES ($1, $2, $3, 10)
+        `INSERT INTO users (id, username, email, reputation, is_active)
+         VALUES ($1, $2, $3, 10, TRUE)
          ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username
-         RETURNING id, clerk_id AS "clerkId", username, email, reputation`,
+         RETURNING id, clerk_id AS "clerkId", username, email, reputation, is_active AS "isActive", anonymized_at AS "anonymizedAt"`,
         [inputId, name, userEmail]
       );
     }

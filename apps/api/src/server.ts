@@ -53,6 +53,15 @@ if (ALLOW_DEV_AUTH && IS_PRODUCTION) {
   process.exit(1);
 }
 
+// Ensure JWT secret is robust in production
+if (IS_PRODUCTION) {
+  const jwtSec = process.env.JWT_SECRET || '';
+  if (!jwtSec || jwtSec.length < 32 || jwtSec.includes('CHANGE_IN_PRODUCTION')) {
+    logger.fatal('[ARGUS] CRITICAL: JWT_SECRET must be set to a strong random secret (>= 32 chars) in production. Exiting.');
+    process.exit(1);
+  }
+}
+
 // -----------------------------------------------------------------------
 // Gateway / Reverse Proxy Trust
 // -----------------------------------------------------------------------
@@ -207,7 +216,13 @@ app.use(async (req: Request, _res: Response, next: NextFunction) => {
     }
 
     if (resolvedId) {
-      req.user = await getOrCreateUser(resolvedId, resolvedUsername, resolvedEmail);
+      const user = await getOrCreateUser(resolvedId, resolvedUsername, resolvedEmail);
+      if (user && user.isActive === false) {
+        req.log.warn({ userId: user.id }, '[AUTH] Deactivated user attempted access');
+        req.user = undefined;
+      } else {
+        req.user = user;
+      }
     }
     next();
   } catch (err) {

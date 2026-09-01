@@ -1,31 +1,56 @@
 /**
  * Authentication and API Client Manager for Argus Web Application.
  *
- * Stores the JWT issued by the Argus API in sessionStorage.
- * Attaches `Authorization: Bearer <token>` to all outgoing API requests.
+ * Implements:
+ *  - Dual Token Storage (15-min Access Token + 7-day Rotating Refresh Token).
+ *  - Silent Token Refresh Interceptor with single-flight mutex on 401 Unauthorized.
+ *  - Immediate local & server-side session cleanup on logout / deactivation.
  */
 
-const TOKEN_KEY = 'argus_auth_token';
+const ACCESS_TOKEN_KEY = 'argus_auth_token';
+const REFRESH_TOKEN_KEY = 'argus_refresh_token';
 
-/** Gets the active Bearer JWT token from sessionStorage. */
+/** Gets active Access Token */
 export function getAuthToken(): string | null {
-  return sessionStorage.getItem(TOKEN_KEY);
+  return sessionStorage.getItem(ACCESS_TOKEN_KEY);
 }
 
-/** Sets the active Bearer JWT token in sessionStorage. */
+/** Sets active Access Token */
 export function setAuthToken(token: string): void {
-  sessionStorage.setItem(TOKEN_KEY, token);
+  sessionStorage.setItem(ACCESS_TOKEN_KEY, token);
 }
 
-/** Clears the active Bearer JWT token from sessionStorage. */
+/** Gets active Refresh Token */
+export function getRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_TOKEN_KEY) || sessionStorage.getItem(REFRESH_TOKEN_KEY);
+}
+
+/** Sets active Refresh Token */
+export function setRefreshToken(token: string): void {
+  localStorage.setItem(REFRESH_TOKEN_KEY, token);
+  sessionStorage.setItem(REFRESH_TOKEN_KEY, token);
+}
+
+/** Sets the full active authentication session */
+export function setAuthSession(accessToken: string, refreshToken?: string): void {
+  setAuthToken(accessToken);
+  if (refreshToken) {
+    setRefreshToken(refreshToken);
+  }
+}
+
+/** Clears all tokens from local storage */
+export function clearAuthSession(): void {
+  sessionStorage.removeItem(ACCESS_TOKEN_KEY);
+  sessionStorage.removeItem(REFRESH_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
+
 export function clearAuthToken(): void {
-  sessionStorage.removeItem(TOKEN_KEY);
+  clearAuthSession();
 }
 
-/**
- * Generates standard request headers for API requests.
- * Always includes `Authorization: Bearer <token>` when a token is present.
- */
+/** Generates standard request headers */
 export function getAuthHeaders(): Record<string, string> {
   const token = getAuthToken();
   const headers: Record<string, string> = {
@@ -39,40 +64,120 @@ export function getAuthHeaders(): Record<string, string> {
   return headers;
 }
 
+// Single-flight promise mutex to prevent concurrent refresh storms
+let refreshPromise: Promise<string | null> | null = null;
+
 /**
- * Standardized fetch wrapper that automatically injects auth headers.
+ * Attempts to silently refresh the access token using the stored refresh token.
+ * Uses a single-flight mutex so concurrent 401s reuse the same refresh request.
+ */
+export async function refreshAccessToken(): Promise<string | null> {
+  const currentRefreshToken = getRefreshToken();
+  if (!currentRefreshToken) {
+    clearAuthSession();
+    return null;
+  }
+
+  if (refreshPromise) {
+    return refreshPromise;
+  }
+
+  refreshPromise = (async () => {
+    try {
+      const res = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: currentRefreshToken }),
+      });
+
+      if (!res.ok) {
+        clearAuthSession();
+        window.dispatchEvent(new CustomEvent('argus_auth_expired'));
+        return null;
+      }
+
+      const data = await res.json();
+      if (data.accessToken) {
+        setAuthSession(data.accessToken, data.refreshToken);
+        return data.accessToken as string;
+      }
+      clearAuthSession();
+      return null;
+    } catch {
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
+/**
+ * Standardized fetch wrapper that:
+ * 1. Automatically injects active Authorization headers.
+ * 2. Catches 401 Unauthorized responses and performs a silent token refresh.
+ * 3. Transparently replays the original request with the fresh token.
  */
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const headers = {
+  const initialHeaders = {
     ...getAuthHeaders(),
     ...(init?.headers || {}),
   };
 
-  return fetch(input, {
+  let response = await fetch(input, {
     ...init,
-    headers,
+    headers: initialHeaders,
   });
-}
 
-/**
- * Signs the user out by blacklisting the token on the server,
- * then clearing the local session.
- */
-export async function logout(): Promise<void> {
-  try {
-    await apiFetch('/api/auth/logout', { method: 'POST' });
-  } catch {
-    // Ignore network errors — clear locally regardless
+  // If 401 Unauthorized occurs and we have a refresh token, attempt silent refresh once
+  if (response.status === 401 && getRefreshToken()) {
+    const newAccessToken = await refreshAccessToken();
+    if (newAccessToken) {
+      // Re-try the original request with the newly minted access token
+      const retryHeaders = {
+        ...(init?.headers || {}),
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${newAccessToken}`,
+      };
+
+      response = await fetch(input, {
+        ...init,
+        headers: retryHeaders,
+      });
+    }
   }
-  clearAuthToken();
+
+  return response;
 }
 
-// ── Legacy dev-mode helpers kept for backward compat but no longer used ──────
-/** @deprecated No longer used — kept so old imports don't break */
-export function getDevUserCredentials(): { id: string; name: string } {
-  return { id: 'legacy', name: 'legacy' };
+/** Signs the user out by revoking sessions on the server and clearing local storage */
+export async function logout(): Promise<void> {
+  const refreshToken = getRefreshToken();
+  try {
+    await apiFetch('/api/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken }),
+    });
+  } catch {
+    // Clear locally regardless of network outcome
+  }
+  clearAuthSession();
 }
-/** @deprecated No longer used */
-export function switchDevUser(): { id: string; name: string } {
-  return { id: 'legacy', name: 'legacy' };
+
+/** Deactivates user account and scrubs personal data (GDPR) */
+export async function deactivateAccount(): Promise<boolean> {
+  try {
+    const res = await apiFetch('/api/auth/me/deactivate', {
+      method: 'POST',
+    });
+    if (res.ok) {
+      clearAuthSession();
+      window.dispatchEvent(new CustomEvent('argus_auth_expired'));
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }

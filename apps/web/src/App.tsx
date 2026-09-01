@@ -72,6 +72,15 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     fetchUserProfile();
+
+    const handleAuthExpired = () => {
+      setCurrentUser(null);
+    };
+
+    window.addEventListener('argus_auth_expired', handleAuthExpired);
+    return () => {
+      window.removeEventListener('argus_auth_expired', handleAuthExpired);
+    };
   }, [fetchUserProfile]);
 
   // Callback passed to pages/modals — refreshes user state after auth changes

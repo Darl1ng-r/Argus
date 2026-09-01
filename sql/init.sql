@@ -6,9 +6,11 @@ CREATE TABLE IF NOT EXISTS users (
     id         TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     clerk_id   TEXT UNIQUE,
     username   VARCHAR(50)  UNIQUE NOT NULL,
-    email      VARCHAR(255) UNIQUE NOT NULL,
-    reputation INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    email         VARCHAR(255) UNIQUE NOT NULL,
+    reputation    INT NOT NULL DEFAULT 0,
+    is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+    anonymized_at TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 INSERT INTO users (id, username, email)
