@@ -6,6 +6,7 @@ import { RegisterPage } from './pages/RegisterPage';
 import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { User } from './types';
 import { getAuthToken, apiFetch } from './utils/auth';
+import { I18nProvider } from './i18n';
 
 // Fix #17 — Code splitting: TopicPage (+ Cytoscape.js ~500KB) is loaded lazily
 // only when the user navigates to a topic route.
@@ -47,7 +48,7 @@ function GraphLoadingFallback() {
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(() => Boolean(getAuthToken()));
 
   const fetchUserProfile = useCallback(async () => {
     if (!getAuthToken()) {
@@ -93,28 +94,30 @@ export const App: React.FC = () => {
   }
 
   return (
-    <Router>
-      <Suspense fallback={<GraphLoadingFallback />}>
-        <Routes>
-          <Route path="/" element={<HomePage user={currentUser} onUserChanged={handleUserChanged} />} />
-          <Route path="/login" element={<LoginPage onLoginSuccess={handleUserChanged} />} />
-          <Route path="/register" element={<RegisterPage onRegisterSuccess={handleUserChanged} />} />
-          <Route path="/forgot-password" element={<ResetPasswordPage />} />
-          <Route path="/reset-password" element={<ResetPasswordPage />} />
-          <Route
-            path="/t/:topicId"
-            element={
-              currentUser
-                ? <TopicPage currentUser={currentUser} onSwitchUser={handleUserChanged} />
-                : <Navigate to="/" replace state={{ requireAuth: true }} />
-            }
-          />
-          <Route
-            path="*"
-            element={<HomePage user={currentUser} onUserChanged={handleUserChanged} />}
-          />
-        </Routes>
-      </Suspense>
-    </Router>
+    <I18nProvider>
+      <Router>
+        <Suspense fallback={<GraphLoadingFallback />}>
+          <Routes>
+            <Route path="/" element={<HomePage user={currentUser} onUserChanged={handleUserChanged} />} />
+            <Route path="/login" element={<LoginPage onLoginSuccess={handleUserChanged} />} />
+            <Route path="/register" element={<RegisterPage onRegisterSuccess={handleUserChanged} />} />
+            <Route path="/forgot-password" element={<ResetPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route
+              path="/t/:topicId"
+              element={
+                currentUser
+                  ? <TopicPage currentUser={currentUser} onSwitchUser={handleUserChanged} />
+                  : <Navigate to="/" replace state={{ requireAuth: true }} />
+              }
+            />
+            <Route
+              path="*"
+              element={<HomePage user={currentUser} onUserChanged={handleUserChanged} />}
+            />
+          </Routes>
+        </Suspense>
+      </Router>
+    </I18nProvider>
   );
 };

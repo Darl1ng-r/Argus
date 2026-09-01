@@ -1,5 +1,6 @@
 import React from 'react';
 import { ViewMode, User } from '../types';
+import { useTranslation, Language } from '../i18n';
 
 interface HeaderProps {
   topicTitle: string;
@@ -29,12 +30,13 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenAuthModal,
 }) => {
   const [isExportOpen, setIsExportOpen] = React.useState(false);
+  const { language, setLanguage, t } = useTranslation();
 
   return (
     <header>
       <div className="brand">
         <h1>ARGUS</h1>
-        <span className="tag">Ratio, in the open.</span>
+        <span className="tag">{t.brandTagline}</span>
       </div>
       
       <div className="topic-line" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -209,6 +211,30 @@ export const Header: React.FC<HeaderProps> = ({
           </svg>
           Fork
         </button>
+
+        <select
+          value={language}
+          onChange={(e) => setLanguage(e.target.value as Language)}
+          title="Select Agora Language"
+          style={{
+            fontFamily: 'Inter, sans-serif',
+            fontSize: '11px',
+            fontWeight: 600,
+            background: 'var(--marble-panel)',
+            color: 'var(--ink)',
+            border: '1px solid var(--marble-line)',
+            padding: '5px 8px',
+            borderRadius: '16px',
+            cursor: 'pointer',
+            outline: 'none',
+          }}
+        >
+          <option value="en">🌐 English</option>
+          <option value="es">🌐 Español</option>
+          <option value="ar">🌐 العربية</option>
+          <option value="fr">🌐 Français</option>
+          <option value="el">🌐 Ἑλληνικά</option>
+        </select>
 
         {user ? (
           <button

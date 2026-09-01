@@ -32,6 +32,32 @@ pool.on('connect', () => {
 
 export const db = pool;
 
+// Read-Replica Pool: routes to regional read-replica if DATABASE_READ_URL is set, otherwise primary
+const readPool = process.env.DATABASE_READ_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_READ_URL,
+      max: parseInt(process.env.DB_READ_POOL_MAX || process.env.DB_POOL_MAX || '20', 10),
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
+      statement_timeout: 15_000,
+      query_timeout: 15_000,
+      application_name: 'argus-api-read-replica',
+      ssl: useSSL
+        ? {
+            rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false',
+          }
+        : false,
+    })
+  : pool;
+
+if (process.env.DATABASE_READ_URL) {
+  readPool.on('error', (err) => {
+    process.stderr.write(`[DB-READ-REPLICA] Unexpected idle client error: ${err.message}\n`);
+  });
+}
+
+export const readDb = readPool;
+
 /**
  * Sets active user session context for PostgreSQL Row-Level Security (RLS) evaluation.
  * NOTE: Must be called on a dedicated PoolClient (not a shared pool query) because

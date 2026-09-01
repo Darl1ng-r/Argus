@@ -1,4 +1,4 @@
-import { db } from '../db.js';
+import { db, readDb } from '../db.js';
 import { Topic, TopicSummary, PaginatedTopics, ClaimNode, User } from './graphTypes.js';
 import { rowToNode } from './nodeService.js';
 import { getOrCreateUser } from './userService.js';
@@ -196,7 +196,7 @@ export async function getAllTopics(
         queryParams.push(decoded.createdAt, decoded.id);
       }
 
-      const topicsResult = await db.query<{
+      const topicsResult = await readDb.query<{
         id: string;
         title: string;
         root_node_id: string;
@@ -243,7 +243,7 @@ export async function getAllTopics(
 
     const offset = Math.max(0, (page - 1) * limit);
 
-    const topicsResult = await db.query<{
+    const topicsResult = await readDb.query<{
       id: string;
       title: string;
       root_node_id: string;
@@ -302,7 +302,7 @@ export async function getAllTopics(
 
 export async function getTopic(topicId: string, currentUserId?: string): Promise<Topic | null> {
   try {
-    const result = await db.query<{
+    const result = await readDb.query<{
       id: string;
       title: string;
       root_node_id: string;
@@ -374,7 +374,7 @@ export async function getTopicSubgraph(
       const limitParamIndex = fromNodeId ? '$5' : '$4';
       const capParamIndex = fromNodeId ? '$6' : '$5';
 
-      const nodesResult = await db.query(
+      const nodesResult = await readDb.query(
         `WITH RECURSIVE topic_tree AS (
            SELECT
              n.id, n.parent_id, n.author_id, u.username AS author_username,
@@ -428,7 +428,7 @@ export async function getTopicSubgraph(
       return baseGraph.nodes;
     }
 
-    const userVotesResult = await db.query<{ node_id: string; vote_type: string }>(
+    const userVotesResult = await readDb.query<{ node_id: string; vote_type: string }>(
       `SELECT v.node_id, v.vote_type
        FROM votes v
        JOIN nodes n ON n.id = v.node_id
@@ -454,7 +454,7 @@ export async function getTopicSubgraph(
 }
 
 export async function getTopicFlatNodes(topicId: string): Promise<ClaimNode[]> {
-  const res = await db.query(
+  const res = await readDb.query(
     `SELECT
        n.id, n.parent_id, n.author_id, u.username AS author_username,
        n.edge_type, n.pos_x, n.pos_y, n.content,
@@ -470,7 +470,7 @@ export async function getTopicFlatNodes(topicId: string): Promise<ClaimNode[]> {
 }
 
 export async function getSteelmanPath(topicId: string, currentUserId?: string): Promise<ClaimNode[]> {
-  const res = await db.query(
+  const res = await readDb.query(
     `SELECT
        n.id, n.parent_id, n.author_id, u.username AS author_username,
        n.edge_type, n.pos_x, n.pos_y, n.content,

@@ -1,13 +1,26 @@
-import { db } from '../db.js';
+/**
+ * Search Service for Argus Debate Graphs.
+ *
+ * Global & Multilingual Capabilities:
+ *  - Uses readDb pool to route queries to regional read replicas when available.
+ *  - Supports universal Unicode character set matching using 'simple' full-text tokenization
+ *    combined with ILIKE substring scoring (works seamlessly across Latin, Arabic, Greek, Cyrillic, etc.).
+ *  - Ranked by relevance score + creation recency.
+ */
+
+import { readDb } from '../db.js';
 import { SearchResults, TopicSummary } from './graphTypes.js';
 
-export async function searchDebatesAndClaims(query: string, limit = 10): Promise<SearchResults> {
+export async function searchDebatesAndClaims(query: string, limit = 15): Promise<SearchResults> {
   const cleanQuery = query.trim();
   if (!cleanQuery) {
     return { topics: [], claims: [] };
   }
 
-  const topicRes = await db.query<{
+  const boundedLimit = Math.min(Math.max(1, limit), 50);
+
+  // 1. Search Topics with ranking
+  const topicRes = await readDb.query<{
     id: string;
     title: string;
     root_node_id: string;
@@ -24,13 +37,20 @@ export async function searchDebatesAndClaims(query: string, limit = 10): Promise
      LEFT JOIN nodes n ON n.topic_id = t.id AND n.status = 'ACTIVE'
      LEFT JOIN nodes root_node ON root_node.id = t.root_node_id
      WHERE t.title ILIKE $1
+        OR to_tsvector('simple', t.title) @@ plainto_tsquery('simple', $2)
      GROUP BY t.id, root_node.content
-     ORDER BY t.created_at DESC
-     LIMIT $2`,
-    [`%${cleanQuery}%`, limit]
+     ORDER BY
+       CASE
+         WHEN t.title ILIKE $1 THEN 1
+         ELSE 2
+       END,
+       t.created_at DESC
+     LIMIT $3`,
+    [`%${cleanQuery}%`, cleanQuery, boundedLimit]
   );
 
-  const claimsRes = await db.query<{
+  // 2. Search Claims with ranking
+  const claimsRes = await readDb.query<{
     id: string;
     topic_id: string;
     topic_title: string;
@@ -42,10 +62,16 @@ export async function searchDebatesAndClaims(query: string, limit = 10): Promise
        n.id, n.topic_id, t.title AS topic_title, n.content, n.edge_type, n.created_at
      FROM nodes n
      JOIN topics t ON t.id = n.topic_id
-     WHERE n.status = 'ACTIVE' AND n.content ILIKE $1
-     ORDER BY n.created_at DESC
-     LIMIT $2`,
-    [`%${cleanQuery}%`, limit]
+     WHERE n.status = 'ACTIVE'
+       AND (n.content ILIKE $1 OR to_tsvector('simple', n.content) @@ plainto_tsquery('simple', $2))
+     ORDER BY
+       CASE
+         WHEN n.content ILIKE $1 THEN 1
+         ELSE 2
+       END,
+       n.created_at DESC
+     LIMIT $3`,
+    [`%${cleanQuery}%`, cleanQuery, boundedLimit]
   );
 
   const topics: TopicSummary[] = topicRes.rows.map((t) => ({
