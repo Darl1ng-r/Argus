@@ -21,6 +21,9 @@ export interface TopicSummary {
   rootNodeId: string;
   forkCount: number;
   forkedFromId?: string | null;
+  authorId: string;
+  authorUsername?: string;
+  isPrivate: boolean;
   createdAt: string;
   claimCount: number;
   rootClaimContent: string | null;
@@ -32,6 +35,9 @@ export interface Topic {
   rootNodeId: string;
   forkCount: number;
   forkedFromId?: string | null;
+  authorId: string;
+  authorUsername?: string;
+  isPrivate: boolean;
   createdAt: string;
   nodes: ClaimNode[];
 }

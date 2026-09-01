@@ -20,7 +20,7 @@ export function hasRequiredRole(userRole: TopicRole | null, requiredRole: TopicR
  * Resolves a user's role for a specific topic.
  * - Topic author is automatically 'owner'.
  * - Explicit entry in topic_members table is returned if present.
- * - Any authenticated user defaults to 'contributor' for public topics.
+ * - Non-owner users are 'viewer' (can view, vote, and fork to their own profile to edit).
  * - Anonymous users are 'viewer'.
  */
 export async function getUserTopicRole(
@@ -47,8 +47,8 @@ export async function getUserTopicRole(
     return 'owner';
   }
 
-  // Public debate model: authenticated users default to contributor
-  return 'contributor';
+  // GitHub-style model: other users are 'viewer' (must fork to modify)
+  return 'viewer';
 }
 
 /**

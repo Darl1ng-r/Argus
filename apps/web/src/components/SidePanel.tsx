@@ -19,6 +19,8 @@ const EDGE_META = {
 interface SidePanelProps {
   selectedNode: ClaimNode | null;
   currentUser: User | null;
+  isOwner?: boolean;
+  onFork?: () => void;
   onVote: (nodeId: string, type: 'support' | 'contest') => void;
   onAddClaim: (parentId: string, edgeType: EdgeType, content: string) => void;
   onEditClaim?: (nodeId: string, newContent: string) => void;
@@ -29,6 +31,8 @@ interface SidePanelProps {
 export const SidePanel: React.FC<SidePanelProps> = ({
   selectedNode,
   currentUser,
+  isOwner = true,
+  onFork,
   onVote,
   onAddClaim,
   onEditClaim,
@@ -287,33 +291,69 @@ export const SidePanel: React.FC<SidePanelProps> = ({
           </button>
         </div>
 
-        <button className="add-toggle" onClick={() => setIsFormOpen(!isFormOpen)}>
-          ＋ ADD A RESPONSE
-        </button>
+        {isOwner ? (
+          <>
+            <button className="add-toggle" onClick={() => setIsFormOpen(!isFormOpen)}>
+              ＋ ADD A RESPONSE
+            </button>
 
-        <form className={`add-form ${isFormOpen ? 'open' : ''}`} onSubmit={handleSubmit}>
-          <label>Relation to this claim</label>
-          <select
-            value={edgeType}
-            onChange={(e) => setEdgeType(e.target.value as EdgeType)}
-          >
-            <option value="supports">Supports</option>
-            <option value="refutes">Refutes</option>
-            <option value="clarifies">Clarifies</option>
-            <option value="evidence">Needs evidence</option>
-          </select>
+            <form className={`add-form ${isFormOpen ? 'open' : ''}`} onSubmit={handleSubmit}>
+              <label>Relation to this claim</label>
+              <select
+                value={edgeType}
+                onChange={(e) => setEdgeType(e.target.value as EdgeType)}
+              >
+                <option value="supports">Supports</option>
+                <option value="refutes">Refutes</option>
+                <option value="clarifies">Clarifies</option>
+                <option value="evidence">Needs evidence</option>
+              </select>
 
-          <label>Your claim</label>
-          <textarea
-            value={claimText}
-            onChange={(e) => setClaimText(e.target.value)}
-            placeholder="State one claim, as plainly as you can…"
-          />
+              <label>Your claim</label>
+              <textarea
+                value={claimText}
+                onChange={(e) => setClaimText(e.target.value)}
+                placeholder="State one claim, as plainly as you can…"
+              />
 
-          <button type="submit" className="submit-btn">
-            Add to the graph
-          </button>
-        </form>
+              <button type="submit" className="submit-btn">
+                Add to the graph
+              </button>
+            </form>
+          </>
+        ) : (
+          <div style={{ marginTop: '16px', padding: '14px', background: '#FFFDF8', border: '1px solid var(--marble-line)', borderRadius: '8px', textAlign: 'center' }}>
+            <div style={{ fontFamily: 'Cinzel, serif', fontSize: '11px', fontWeight: 700, color: 'var(--gold)', marginBottom: '6px', letterSpacing: '0.06em' }}>
+              DEBATE IS READ-ONLY
+            </div>
+            <p style={{ fontFamily: 'Crimson Pro, serif', fontSize: '13.5px', color: 'var(--ink-soft)', margin: '0 0 12px', lineHeight: 1.35 }}>
+              To add your own claims or refute points, fork this debate to your profile.
+            </p>
+            {onFork && (
+              <button
+                onClick={onFork}
+                style={{
+                  width: '100%',
+                  padding: '8px 14px',
+                  background: 'var(--gold)',
+                  color: '#FFFDF8',
+                  border: 'none',
+                  borderRadius: '6px',
+                  fontFamily: 'Inter, sans-serif',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px'
+                }}
+              >
+                <span>Fork Debate</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </aside>
   );

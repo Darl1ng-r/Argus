@@ -22,6 +22,7 @@ import { topicEvents, TopicMutationEvent, topicPubSubChannel } from '../services
 import { validateIdentifier, ValidationError } from '../utils/sanitizer.js';
 import { sendError } from '../middleware/index.js';
 import { activeSseConnectionsGauge } from '../utils/metrics.js';
+import { registerSseClient, unregisterSseClient } from '../services/sseManager.js';
 
 // ---------------------------------------------------------------------------
 // Shared Redis multiplexer — one subscriber per topic, many SSE clients
@@ -121,6 +122,9 @@ export async function topicSseHandler(req: Request, res: Response): Promise<void
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
+    const connectionId = `sse-topic-${topicId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    registerSseClient(connectionId, res, { topicId });
+
     openConnections.set(topicId, (openConnections.get(topicId) ?? 0) + 1);
     ipConnections.set(clientIp, currentIpCount + 1);
     activeSseConnectionsGauge.inc();
@@ -153,6 +157,7 @@ export async function topicSseHandler(req: Request, res: Response): Promise<void
 
     req.on('close', async () => {
       clearInterval(heartbeat);
+      unregisterSseClient(connectionId);
       topicEvents.removeListener(localChannel, onLocalMutation);
       await unsubscribeRedis();
       openConnections.set(topicId, Math.max(0, (openConnections.get(topicId) ?? 1) - 1));

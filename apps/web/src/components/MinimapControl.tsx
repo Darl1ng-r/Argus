@@ -40,26 +40,30 @@ export const MinimapControl: React.FC<MinimapControlProps> = ({
         right: '24px',
         width: `${mapWidth}px`,
         height: `${mapHeight}px`,
-        background: '#FFFDF8',
-        border: '1.5px solid var(--marble-line, #DED6C3)',
-        borderRadius: '8px',
-        boxShadow: '0 8px 16px rgba(0,0,0,0.1)',
+        background: 'rgba(255, 253, 248, 0.94)',
+        border: '1px solid var(--marble-line, #DED6C3)',
+        borderRadius: '10px',
+        boxShadow: '0 8px 20px rgba(43, 38, 34, 0.08)',
+        backdropFilter: 'blur(8px)',
         zIndex: 50,
         overflow: 'hidden',
         cursor: 'crosshair',
+        transition: 'box-shadow 0.15s ease',
       }}
       title="Graph Radar Minimap — Click any node dot to navigate"
+      onMouseEnter={(e) => (e.currentTarget.style.boxShadow = '0 12px 28px rgba(43, 38, 34, 0.14)')}
+      onMouseLeave={(e) => (e.currentTarget.style.boxShadow = '0 8px 20px rgba(43, 38, 34, 0.08)')}
     >
       <div
         style={{
           position: 'absolute',
-          top: '4px',
-          left: '6px',
+          top: '5px',
+          left: '8px',
           fontSize: '9px',
           fontFamily: 'Inter, sans-serif',
-          fontWeight: 700,
-          letterSpacing: '0.08em',
-          color: 'var(--parchment, #A89070)',
+          fontWeight: 800,
+          letterSpacing: '0.1em',
+          color: 'var(--gold, #8F6414)',
           textTransform: 'uppercase',
           pointerEvents: 'none',
         }}
@@ -75,11 +79,11 @@ export const MinimapControl: React.FC<MinimapControlProps> = ({
 
           const fill =
             node.edgeType === 'root'
-              ? '#B8892B'
+              ? '#8F6414'
               : node.edgeType === 'supports'
-              ? '#6E7B4A'
+              ? '#5B693A'
               : node.edgeType === 'refutes'
-              ? '#A2472E'
+              ? '#9B3333'
               : '#2E5C7A';
 
           return (
@@ -87,10 +91,10 @@ export const MinimapControl: React.FC<MinimapControlProps> = ({
               key={node.id}
               cx={Math.max(6, Math.min(mapWidth - 6, cx))}
               cy={Math.max(6, Math.min(mapHeight - 6, cy))}
-              r={isSelected ? 5 : 3.5}
+              r={isSelected ? 5.5 : 3.5}
               fill={fill}
               stroke={isSelected ? '#2B2622' : 'none'}
-              strokeWidth={1.5}
+              strokeWidth={isSelected ? 1.5 : 0}
               onClick={() => onSelectNode(node.id)}
               style={{ cursor: 'pointer', transition: 'r 0.15s' }}
             />

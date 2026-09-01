@@ -40,13 +40,6 @@ describe('New Improvements & Security Fixes Tests', () => {
     });
   });
 
-  describe('S-2: POST /api/topics/:id/ai-analyze (Auth Guard)', () => {
-    it('returns HTTP 401 Unauthorized when unauthenticated', async () => {
-      const res = await request(app).post('/api/topics/topic-123/ai-analyze');
-      expect([401, 500]).toContain(res.status);
-    });
-  });
-
   describe('F-1: PUT /api/topics/:id/nodes/:nodeId (Auth Guard)', () => {
     it('returns HTTP 401 Unauthorized when unauthenticated', async () => {
       const res = await request(app)

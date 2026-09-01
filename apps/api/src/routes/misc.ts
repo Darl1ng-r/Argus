@@ -41,7 +41,7 @@ router.get('/search', async (req: Request, res: Response) => {
 
     const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit || '20'), 10)));
     const { searchDebatesAndClaims } = await import('../services/graphService.js');
-    const results = await searchDebatesAndClaims(q, limit);
+    const results = await searchDebatesAndClaims(q, limit, req.user?.id);
 
     res.set('Cache-Control', 'public, max-age=10, stale-while-revalidate=30');
     res.json(results);

@@ -30,7 +30,7 @@ const router = Router({ mergeParams: true });
 router.post(
   '/',
   requireAuth,
-  requireTopicRole('contributor'),
+  requireTopicRole('owner'),
   idempotencyGuard,
   mutationLimiter,
   async (req: Request, res: Response) => {
@@ -69,12 +69,12 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
-// POST /api/topics/:id/nodes/:nodeId/vote — vote on a node (contributor+)
+// POST /api/topics/:id/nodes/:nodeId/vote — vote on a node (viewer+)
 // ---------------------------------------------------------------------------
 router.post(
   '/:nodeId/vote',
   requireAuth,
-  requireTopicRole('contributor'),
+  requireTopicRole('viewer'),
   voteLimiter,
   async (req: Request, res: Response) => {
     try {

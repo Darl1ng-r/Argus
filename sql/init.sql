@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS topics (
     author_id      TEXT NOT NULL REFERENCES users(id),
     forked_from_id TEXT REFERENCES topics(id) ON DELETE SET NULL,
     fork_count     INT NOT NULL DEFAULT 0,
+    is_private     BOOLEAN NOT NULL DEFAULT FALSE,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

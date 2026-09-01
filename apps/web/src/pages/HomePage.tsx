@@ -1,18 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { User } from '../types';
+import { User, TopicSummary } from '../types';
 import { apiFetch } from '../utils/auth';
 import { AuthModal } from '../components/AuthModal';
-
-export interface TopicSummary {
-  id: string;
-  title: string;
-  rootNodeId: string;
-  forkCount: number;
-  createdAt: string;
-  claimCount: number;        // Now returned directly by the API (no N+1)
-  rootClaimContent: string | null;
-}
 
 interface HomePageProps {
   user: User | null;
@@ -27,6 +17,8 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onUserChanged }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newRootClaim, setNewRootClaim] = useState('');
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [filterMode, setFilterMode] = useState<'all' | 'mine'>('all');
   const [formError, setFormError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -45,6 +37,7 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onUserChanged }) => {
       return;
     }
     setAuthNotice(null);
+    setIsPrivate(false);
     setIsModalOpen(true);
   };
 
@@ -58,13 +51,13 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onUserChanged }) => {
     navigate(`/t/${topicId}`);
   };
 
-  // Fix #6 — Single API call returns enriched data; no N+1 per-topic fetches
+  // Fix #6 — Single API call returns enriched data with auth token; no N+1 per-topic fetches
   const fetchTopics = useCallback(async (p = 1) => {
     setIsLoading(true);
     setErrorMsg(null);
 
     try {
-      const res = await fetch(`/api/topics?page=${p}&limit=20`);
+      const res = await apiFetch(`/api/topics?page=${p}&limit=20`);
       if (!res.ok) {
         throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
       }
@@ -102,7 +95,8 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onUserChanged }) => {
         method: 'POST',
         body: JSON.stringify({
           title: newTitle.trim(),
-          rootClaim: newRootClaim.trim()
+          rootClaim: newRootClaim.trim(),
+          isPrivate,
         })
       });
 
@@ -111,6 +105,7 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onUserChanged }) => {
         setIsModalOpen(false);
         setNewTitle('');
         setNewRootClaim('');
+        setIsPrivate(false);
         navigate(`/t/${createdTopic.id}`);
       } else {
         const errData = await res.json();
@@ -123,11 +118,15 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onUserChanged }) => {
     }
   };
 
-  const filteredTopics = topics.filter(
-    (t) =>
+  const filteredTopics = topics.filter((t) => {
+    if (filterMode === 'mine' && user && t.authorId !== user.id) {
+      return false;
+    }
+    return (
       t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (t.rootClaimContent && t.rootClaimContent.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
+    );
+  });
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--marble)', color: 'var(--ink)', display: 'flex', flexDirection: 'column' }}>
@@ -252,6 +251,44 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onUserChanged }) => {
               }}
             />
           </div>
+
+          {/* Filter Tabs: All Debates vs My Debates */}
+          {user && (
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginTop: '16px' }}>
+              <button
+                onClick={() => setFilterMode('all')}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '16px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  fontFamily: 'Inter, sans-serif',
+                  border: filterMode === 'all' ? '1px solid var(--gold)' : '1px solid var(--marble-line)',
+                  background: filterMode === 'all' ? '#FDFBF7' : 'transparent',
+                  color: filterMode === 'all' ? 'var(--gold)' : 'var(--ink-soft)',
+                  cursor: 'pointer',
+                }}
+              >
+                All Debates
+              </button>
+              <button
+                onClick={() => setFilterMode('mine')}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '16px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  fontFamily: 'Inter, sans-serif',
+                  border: filterMode === 'mine' ? '1px solid var(--gold)' : '1px solid var(--marble-line)',
+                  background: filterMode === 'mine' ? '#FDFBF7' : 'transparent',
+                  color: filterMode === 'mine' ? 'var(--gold)' : 'var(--ink-soft)',
+                  cursor: 'pointer',
+                }}
+              >
+                My Debates & Forks
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Network Error Banner */}
@@ -352,8 +389,15 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onUserChanged }) => {
                 }}
               >
                 <div>
-                  <div style={{ fontFamily: 'Cinzel, serif', fontSize: '9.5px', letterSpacing: '0.1em', color: 'var(--gold)', marginBottom: '8px', fontWeight: 600 }}>
-                    ARGUMENT GRAPH
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <div style={{ fontFamily: 'Cinzel, serif', fontSize: '9.5px', letterSpacing: '0.1em', color: 'var(--gold)', fontWeight: 600 }}>
+                      ARGUMENT GRAPH
+                    </div>
+                    {topic.isPrivate && (
+                      <span style={{ fontSize: '10px', background: '#F4EAD4', color: '#8F6414', padding: '2px 8px', borderRadius: '10px', fontWeight: 600 }}>
+                        Private
+                      </span>
+                    )}
                   </div>
                   <h3 style={{ fontFamily: 'Cinzel, serif', fontSize: '15px', lineHeight: 1.35, margin: '0 0 12px', color: 'var(--ink)' }}>
                     {topic.title}
@@ -364,7 +408,9 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onUserChanged }) => {
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--ink-soft)', paddingTop: '12px', borderTop: '1px solid var(--marble-line)' }}>
-                  <span>{topic.claimCount || 1} claims · {topic.forkCount} forks</span>
+                  <span>
+                    {topic.authorId === user?.id ? 'By You' : `@${topic.authorUsername || 'scholar'}`} · {topic.claimCount || 1} claims · {topic.forkCount} forks
+                  </span>
                   <span style={{ color: 'var(--aegean)', fontWeight: 600 }}>View Graph →</span>
                 </div>
               </div>
@@ -448,11 +494,63 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onUserChanged }) => {
                   fontFamily: 'Crimson Pro, serif',
                   borderRadius: '6px',
                   border: '1px solid var(--marble-line)',
-                  marginBottom: '20px',
+                  marginBottom: '16px',
                   background: '#FFFDF8',
                   resize: 'vertical'
                 }}
               />
+
+              {/* Visibility & Permissions Selector */}
+              <label style={{ display: 'block', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-soft)', marginBottom: '8px' }}>
+                Visibility & Permissions
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '20px' }}>
+                <button
+                  type="button"
+                  onClick={() => setIsPrivate(false)}
+                  style={{
+                    padding: '12px 14px',
+                    borderRadius: '8px',
+                    border: !isPrivate ? '2px solid var(--gold)' : '1px solid var(--marble-line)',
+                    background: !isPrivate ? '#FDFBF7' : '#FFFDF8',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '13px', color: 'var(--ink)' }}>
+                    <span>Public Debate</span>
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: 'var(--ink-soft)', lineHeight: 1.3 }}>
+                    Visible to all scholars. Others can view, vote, and fork to edit.
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsPrivate(true)}
+                  style={{
+                    padding: '12px 14px',
+                    borderRadius: '8px',
+                    border: isPrivate ? '2px solid var(--gold)' : '1px solid var(--marble-line)',
+                    background: isPrivate ? '#FDFBF7' : '#FFFDF8',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '13px', color: 'var(--ink)' }}>
+                    <span>Private Debate</span>
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: 'var(--ink-soft)', lineHeight: 1.3 }}>
+                    Only you can view and edit. Hidden from explore and search.
+                  </div>
+                </button>
+              </div>
 
               <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
                 <button

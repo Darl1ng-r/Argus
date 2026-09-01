@@ -16,8 +16,6 @@ import {
   getSteelmanPath,
   TopicRole,
 } from '../services/graphService.js';
-import { analyzeArgumentGraph } from '../services/aiService.js';
-import { enqueueAIAnalysis, getAIJobStatus } from '../services/aiQueueService.js';
 import {
   sanitizeClaimContent,
   sanitizeTopicTitle,
@@ -39,7 +37,7 @@ router.get('/', async (req: Request, res: Response) => {
     const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit || '20'), 10)));
     const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
 
-    const topics = await getAllTopics(page, limit, cursor);
+    const topics = await getAllTopics(page, limit, cursor, req.user?.id);
 
     res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=30');
     res.json(topics);
@@ -84,7 +82,12 @@ router.get('/:id/subgraph', async (req: Request, res: Response) => {
     const subgraph = await getTopicSubgraph(topicId, currentUserId, Math.min(depth, 5), fromNodeId);
     if (!subgraph) return res.status(404).json({ error: 'Topic or node not found' });
 
-    res.set('Cache-Control', 'public, max-age=5, stale-while-revalidate=10');
+    if (subgraph.topic.isPrivate || currentUserId) {
+      res.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    } else {
+      res.set('Cache-Control', 'public, max-age=10, s-maxage=60, stale-while-revalidate=300');
+      res.set('Vary', 'Accept-Encoding, Authorization, X-Language');
+    }
     res.json(subgraph);
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
@@ -125,11 +128,20 @@ router.get('/:id/cycle-check', async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 router.post('/', requireAuth, idempotencyGuard, mutationLimiter, async (req: Request, res: Response) => {
   try {
-    const { title, rootClaim } = req.body as { title?: unknown; rootClaim?: unknown };
+    const { title, rootClaim, isPrivate } = req.body as {
+      title?: unknown;
+      rootClaim?: unknown;
+      isPrivate?: boolean;
+    };
     const sanitizedTitle = sanitizeTopicTitle(title);
     const sanitizedRootClaim = sanitizeClaimContent(rootClaim);
 
-    const topic = await createTopic(sanitizedTitle, sanitizedRootClaim, req.user!.id);
+    const topic = await createTopic(
+      sanitizedTitle,
+      sanitizedRootClaim,
+      req.user!.id,
+      Boolean(isPrivate)
+    );
     res.status(201).json(topic);
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
@@ -207,49 +219,6 @@ router.get('/:id/diff/:compareId', async (req: Request, res: Response) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /api/topics/:id/ai-analyze — BullMQ async AI argument analysis queue
-// Fix S-2: Added requireAuth + mutationLimiter to prevent unauthenticated Gemini budget drain.
-// Fix P-2: Uses getTopicFlatNodes instead of full subgraph to avoid expensive recursive CTE.
-// ---------------------------------------------------------------------------
-router.post('/:id/ai-analyze', requireAuth, mutationLimiter, async (req: Request, res: Response) => {
-  try {
-    const topicId = validateIdentifier(req.params.id, 'topicId');
-
-    // P-2: Verify topic exists with a lightweight check before enqueueing
-    const topicCheck = await getTopic(topicId, req.user?.id);
-    if (!topicCheck) return res.status(404).json({ error: 'Topic not found' });
-
-    const jobInfo = await enqueueAIAnalysis(topicId, req.user?.id);
-    if (jobInfo.status === 'queued') {
-      return res.status(202).json({
-        jobId: jobInfo.jobId,
-        status: 'queued',
-        message: 'AI analysis queued in background worker.',
-      });
-    }
-
-    res.json(jobInfo.result);
-  } catch (err) {
-    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
-    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
-  }
-});
-
-// ---------------------------------------------------------------------------
-// GET /api/topics/:id/ai-analyze/status/:jobId — Check async AI analysis status
-// Fix S-2: Requires auth to prevent job ID enumeration by anonymous users.
-// ---------------------------------------------------------------------------
-router.get('/:id/ai-analyze/status/:jobId', requireAuth, async (req: Request, res: Response) => {
-  try {
-    const jobId = validateIdentifier(req.params.jobId, 'jobId');
-    const status = await getAIJobStatus(jobId);
-    res.json(status);
-  } catch (err) {
-    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
-    sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
-  }
-});
 // ---------------------------------------------------------------------------
 // DELETE /api/topics/:id — delete a topic (F-6, owner only)
 // ---------------------------------------------------------------------------

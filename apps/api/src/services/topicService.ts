@@ -24,7 +24,8 @@ export function decodeCursor(cursor: string): { createdAt: string; id: string } 
 export async function createTopic(
   title: string,
   rootClaimContent: string,
-  authorId: string
+  authorId: string,
+  isPrivate = false
 ): Promise<Topic> {
   const user = await getOrCreateUser(authorId);
 
@@ -32,11 +33,11 @@ export async function createTopic(
   try {
     await client.query('BEGIN');
 
-    const topicRes = await client.query<{ id: string; created_at: Date }>(
-      `INSERT INTO topics (title, author_id, root_node_id, fork_count)
-       VALUES ($1, $2, '00000000-0000-0000-0000-000000000000', 0)
-       RETURNING id, created_at`,
-      [title, user.id]
+    const topicRes = await client.query<{ id: string; created_at: Date; is_private: boolean }>(
+      `INSERT INTO topics (title, author_id, root_node_id, fork_count, is_private)
+       VALUES ($1, $2, '00000000-0000-0000-0000-000000000000', 0, $3)
+       RETURNING id, created_at, is_private`,
+      [title, user.id, isPrivate]
     );
     const topicId = topicRes.rows[0].id;
     const createdAt = topicRes.rows[0].created_at;
@@ -73,6 +74,7 @@ export async function createTopic(
       steel: false,
       userVote: null,
       authorId: user.id,
+      authorUsername: user.username,
       createdAt: createdAt.toISOString(),
     };
 
@@ -81,6 +83,9 @@ export async function createTopic(
       title,
       rootNodeId,
       forkCount: 0,
+      authorId: user.id,
+      authorUsername: user.username,
+      isPrivate,
       createdAt: createdAt.toISOString(),
       nodes: [rootNode],
     };
@@ -175,9 +180,10 @@ const MOCK_NODES: ClaimNode[] = [
 export async function getAllTopics(
   page = 1,
   limit = 20,
-  cursor?: string
+  cursor?: string,
+  currentUserId?: string
 ): Promise<PaginatedTopics> {
-  const cacheKey = `topics_list:p${page}:l${limit}:c${cursor || 'none'}`;
+  const cacheKey = `topics_list:p${page}:l${limit}:c${cursor || 'none'}:u${currentUserId || 'anon'}`;
   const cached = await getCached<PaginatedTopics>(cacheKey);
   if (cached) {
     return cached;
@@ -189,10 +195,15 @@ export async function getAllTopics(
     if (cursor) {
       const decoded = decodeCursor(cursor);
       const queryParams: unknown[] = [fetchLimit];
-      let whereClause = '';
+      let whereClause = 'WHERE (t.is_private = FALSE' + (currentUserId ? ' OR t.author_id = $2)' : ')');
+      if (currentUserId) {
+        queryParams.push(currentUserId);
+      }
 
       if (decoded) {
-        whereClause = 'WHERE (t.created_at < $2 OR (t.created_at = $2 AND t.id < $3))';
+        const p1 = queryParams.length + 1;
+        const p2 = queryParams.length + 2;
+        whereClause += ` AND (t.created_at < $${p1} OR (t.created_at = $${p1} AND t.id < $${p2}))`;
         queryParams.push(decoded.createdAt, decoded.id);
       }
 
@@ -201,19 +212,25 @@ export async function getAllTopics(
         title: string;
         root_node_id: string;
         fork_count: number;
+        forked_from_id: string | null;
+        author_id: string;
+        author_username: string | null;
+        is_private: boolean;
         created_at: Date;
         claim_count: string;
         root_claim_content: string | null;
       }>(
         `SELECT
-           t.id, t.title, t.root_node_id, t.fork_count, t.created_at,
+           t.id, t.title, t.root_node_id, t.fork_count, t.forked_from_id,
+           t.author_id, u.username AS author_username, t.is_private, t.created_at,
            COUNT(n.id) AS claim_count,
            root_node.content AS root_claim_content
          FROM topics t
+         LEFT JOIN users u ON u.id = t.author_id
          LEFT JOIN nodes n ON n.topic_id = t.id AND n.status = 'ACTIVE'
          LEFT JOIN nodes root_node ON root_node.id = t.root_node_id
          ${whereClause}
-         GROUP BY t.id, root_node.content
+         GROUP BY t.id, u.username, root_node.content
          ORDER BY t.created_at DESC, t.id DESC
          LIMIT $1`,
         queryParams
@@ -228,6 +245,10 @@ export async function getAllTopics(
         title: t.title,
         rootNodeId: t.root_node_id,
         forkCount: t.fork_count,
+        forkedFromId: t.forked_from_id,
+        authorId: t.author_id,
+        authorUsername: t.author_username || undefined,
+        isPrivate: t.is_private,
         createdAt: t.created_at.toISOString(),
         claimCount: parseInt(t.claim_count, 10),
         rootClaimContent: t.root_claim_content,
@@ -242,27 +263,39 @@ export async function getAllTopics(
     }
 
     const offset = Math.max(0, (page - 1) * limit);
+    const queryParams: unknown[] = [fetchLimit, offset];
+    let whereClause = 'WHERE (t.is_private = FALSE' + (currentUserId ? ' OR t.author_id = $3)' : ')');
+    if (currentUserId) {
+      queryParams.push(currentUserId);
+    }
 
     const topicsResult = await readDb.query<{
       id: string;
       title: string;
       root_node_id: string;
       fork_count: number;
+      forked_from_id: string | null;
+      author_id: string;
+      author_username: string | null;
+      is_private: boolean;
       created_at: Date;
       claim_count: string;
       root_claim_content: string | null;
     }>(
       `SELECT
-         t.id, t.title, t.root_node_id, t.fork_count, t.created_at,
+         t.id, t.title, t.root_node_id, t.fork_count, t.forked_from_id,
+         t.author_id, u.username AS author_username, t.is_private, t.created_at,
          COUNT(n.id) AS claim_count,
          root_node.content AS root_claim_content
        FROM topics t
+       LEFT JOIN users u ON u.id = t.author_id
        LEFT JOIN nodes n ON n.topic_id = t.id AND n.status = 'ACTIVE'
        LEFT JOIN nodes root_node ON root_node.id = t.root_node_id
-       GROUP BY t.id, root_node.content
+       ${whereClause}
+       GROUP BY t.id, u.username, root_node.content
        ORDER BY t.created_at DESC, t.id DESC
        LIMIT $1 OFFSET $2`,
-      [fetchLimit, offset]
+      queryParams
     );
 
     const rows = topicsResult.rows;
@@ -274,6 +307,10 @@ export async function getAllTopics(
       title: t.title,
       rootNodeId: t.root_node_id,
       forkCount: t.fork_count,
+      forkedFromId: t.forked_from_id,
+      authorId: t.author_id,
+      authorUsername: t.author_username || undefined,
+      isPrivate: t.is_private,
       createdAt: t.created_at.toISOString(),
       claimCount: parseInt(t.claim_count, 10),
       rootClaimContent: t.root_claim_content,
@@ -307,14 +344,36 @@ export async function getTopic(topicId: string, currentUserId?: string): Promise
       title: string;
       root_node_id: string;
       fork_count: number;
+      forked_from_id: string | null;
+      author_id: string;
+      author_username: string | null;
+      is_private: boolean;
       created_at: Date;
-    }>('SELECT id, title, root_node_id, fork_count, created_at FROM topics WHERE id = $1', [
-      topicId,
-    ]);
+    }>(
+      `SELECT t.id, t.title, t.root_node_id, t.fork_count, t.forked_from_id,
+              t.author_id, u.username AS author_username, t.is_private, t.created_at
+       FROM topics t
+       LEFT JOIN users u ON u.id = t.author_id
+       WHERE t.id = $1`,
+      [topicId]
+    );
 
     if (result.rowCount === 0) return null;
 
     const topicRow = result.rows[0];
+
+    // Privacy Guard: If private and viewer is not author or member, return null
+    if (topicRow.is_private) {
+      if (!currentUserId) return null;
+      if (topicRow.author_id !== currentUserId) {
+        const memberRes = await readDb.query(
+          'SELECT role FROM topic_members WHERE topic_id = $1 AND user_id = $2',
+          [topicId, currentUserId]
+        );
+        if (memberRes.rowCount === 0) return null;
+      }
+    }
+
     const nodes = await getTopicSubgraph(topicId, currentUserId);
 
     return {
@@ -322,6 +381,10 @@ export async function getTopic(topicId: string, currentUserId?: string): Promise
       title: topicRow.title,
       rootNodeId: topicRow.root_node_id,
       forkCount: topicRow.fork_count,
+      forkedFromId: topicRow.forked_from_id,
+      authorId: topicRow.author_id,
+      authorUsername: topicRow.author_username || undefined,
+      isPrivate: topicRow.is_private,
       createdAt: topicRow.created_at.toISOString(),
       nodes,
     };
@@ -333,6 +396,8 @@ export async function getTopic(topicId: string, currentUserId?: string): Promise
         title: foundMock.title,
         rootNodeId: foundMock.rootNodeId,
         forkCount: foundMock.forkCount,
+        authorId: 'system-user-0000-0000-000000000000',
+        isPrivate: false,
         createdAt: foundMock.createdAt,
         nodes: MOCK_NODES,
       };
@@ -566,43 +631,91 @@ export async function forkTopic(topicId: string, user: User): Promise<Topic> {
     fork_count: number;
     forked_from_id: string | null;
     author_id: string;
+    is_private: boolean;
     created_at: Date;
-  }>('SELECT id, title, root_node_id, fork_count, forked_from_id, author_id, created_at FROM topics WHERE id = $1', [topicId]);
+  }>('SELECT id, title, root_node_id, fork_count, forked_from_id, author_id, is_private, created_at FROM topics WHERE id = $1', [topicId]);
 
   if (originalMeta.rowCount === 0) throw new ValidationError(`Topic not found: ${topicId}`);
   const original = originalMeta.rows[0];
+
+  if (original.is_private && original.author_id !== user.id) {
+    throw new ValidationError('Forbidden: Cannot fork a private debate.');
+  }
 
   const client = await db.connect();
   try {
     await client.query('BEGIN');
 
     const topicRes = await client.query<{ id: string; created_at: Date }>(
-      `INSERT INTO topics (title, author_id, root_node_id, fork_count, forked_from_id)
-       VALUES ($1, $2, '00000000-0000-0000-0000-000000000000', 0, $3)
+      `INSERT INTO topics (title, author_id, root_node_id, fork_count, forked_from_id, is_private)
+       VALUES ($1, $2, '00000000-0000-0000-0000-000000000000', 0, $3, FALSE)
        RETURNING id, created_at`,
       [original.title, user.id, topicId]
     );
     const newTopicId = topicRes.rows[0].id;
     const newCreatedAt = topicRes.rows[0].created_at;
 
-    await client.query(
-      `INSERT INTO nodes (
-         id, topic_id, parent_id, author_id, edge_type,
-         pos_x, pos_y, content, support_score, contest_score, is_steel, version, status
-       )
-       SELECT
-         id, $1 AS topic_id, parent_id, author_id, edge_type,
-         pos_x, pos_y, content, 0 AS support_score, 0 AS contest_score,
-         is_steel, version, status
+    const origNodesRes = await client.query<{
+      id: string;
+      parent_id: string | null;
+      author_id: string;
+      edge_type: string;
+      pos_x: number;
+      pos_y: number;
+      content: string;
+      is_steel: boolean;
+    }>(
+      `SELECT id, parent_id, author_id, edge_type, pos_x, pos_y, content, is_steel
        FROM nodes
-       WHERE topic_id = $2 AND status = 'ACTIVE'`,
-      [newTopicId, topicId]
+       WHERE topic_id = $1 AND status = 'ACTIVE'`,
+      [topicId]
     );
 
-    await client.query(
-      `UPDATE topics SET root_node_id = $1 WHERE id = $2`,
-      [original.root_node_id, newTopicId]
-    );
+    const idMap = new Map<string, string>();
+    for (const n of origNodesRes.rows) {
+      idMap.set(n.id, crypto.randomUUID());
+    }
+
+    // Topologically sort nodes so parents are always inserted before their children
+    const nodeMap = new Map<string, typeof origNodesRes.rows[0]>();
+    for (const n of origNodesRes.rows) nodeMap.set(n.id, n);
+
+    const sortedNodes: typeof origNodesRes.rows = [];
+    const visited = new Set<string>();
+
+    function visit(node: typeof origNodesRes.rows[0]) {
+      if (visited.has(node.id)) return;
+      if (node.parent_id && nodeMap.has(node.parent_id)) {
+        visit(nodeMap.get(node.parent_id)!);
+      }
+      visited.add(node.id);
+      sortedNodes.push(node);
+    }
+
+    for (const n of origNodesRes.rows) {
+      visit(n);
+    }
+
+    for (const n of sortedNodes) {
+      const newId = idMap.get(n.id)!;
+      const newParentId = n.parent_id ? (idMap.get(n.parent_id) || null) : null;
+      await client.query(
+        `INSERT INTO nodes (
+           id, topic_id, parent_id, author_id, edge_type,
+           pos_x, pos_y, content, support_score, contest_score, is_steel, version, status
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, 0, $9, 1, 'ACTIVE')`,
+        [newId, newTopicId, newParentId, n.author_id, n.edge_type, n.pos_x, n.pos_y, n.content, n.is_steel]
+      );
+    }
+
+    const newRootNodeId = idMap.get(original.root_node_id) || origNodesRes.rows[0]?.id;
+    if (newRootNodeId) {
+      await client.query(
+        `UPDATE topics SET root_node_id = $1 WHERE id = $2`,
+        [newRootNodeId, newTopicId]
+      );
+    }
 
     await client.query(
       `INSERT INTO topic_members (topic_id, user_id, role) VALUES ($1, $2, 'owner')`,
@@ -631,9 +744,12 @@ export async function forkTopic(topicId: string, user: User): Promise<Topic> {
     return {
       id: newTopicId,
       title: original.title,
-      rootNodeId: original.root_node_id,
+      rootNodeId: newRootNodeId,
       forkCount: 0,
       forkedFromId: topicId,
+      authorId: user.id,
+      authorUsername: user.username,
+      isPrivate: false,
       createdAt: newCreatedAt.toISOString(),
       nodes: newNodes,
     };

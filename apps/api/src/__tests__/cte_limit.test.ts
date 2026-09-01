@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { getTopicSubgraph } from '../services/graphService.js';
-import { db } from '../db.js';
+import { db, readDb } from '../db.js';
 
 describe('Performance Fix: CTE Row Limit & Memory Protection', () => {
   it('enforces row limit safety on recursive graph query', async () => {
     let executedSql = '';
 
-    const querySpy = vi.spyOn(db, 'query').mockImplementation(async (sql: string, params?: any[]) => {
+    const querySpy = vi.spyOn(readDb, 'query').mockImplementation(async (sql: string, params?: any[]) => {
       if (typeof sql === 'string') {
         executedSql += sql + '\n';
       }

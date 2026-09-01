@@ -6,10 +6,11 @@ import compression from 'compression';
 import pinoHttp from 'pino-http';
 import pino from 'pino';
 import { verifyToken } from '@clerk/backend';
-import { testConnection } from './db.js';
+import { testConnection, db, readDb } from './db.js';
 import { redisClient } from './redis.js';
 import { getOrCreateUser, User } from './services/graphService.js';
 import { ValidationError } from './utils/sanitizer.js';
+import { drainAllSseClients } from './services/sseManager.js';
 import { globalLimiter } from './middleware/rateLimiter.js';
 import topicsRouter from './routes/topics.js';
 import nodesRouter from './routes/nodes.js';
@@ -301,19 +302,82 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 // -----------------------------------------------------------------------
-// Bootstrap
+// Bootstrap & Graceful Lifecycle Management
 // -----------------------------------------------------------------------
+let serverInstance: ReturnType<typeof app.listen> | null = null;
+let isShuttingDown = false;
+
+export async function gracefulShutdown(signal: string): Promise<void> {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  logger.info(`[ARGUS API] Received ${signal}. Initiating graceful shutdown...`);
+
+  const shutdownTimeout = setTimeout(() => {
+    logger.error('[ARGUS API] Graceful shutdown timed out (15s limit). Forcing process exit.');
+    process.exit(1);
+  }, 15_000);
+  shutdownTimeout.unref();
+
+  try {
+    // 1. Stop accepting new HTTP connections
+    if (serverInstance) {
+      await new Promise<void>((resolve) => {
+        serverInstance!.close((err) => {
+          if (err) logger.warn({ err }, '[ARGUS API] Error closing HTTP server');
+          resolve();
+        });
+      });
+      logger.info('[ARGUS API] HTTP listener closed to new connections ✓');
+    }
+
+    // 2. Drain all active SSE connections with randomized anti-thundering-herd jitter
+    const drainedCount = await drainAllSseClients(1000, 4000);
+    logger.info(`[ARGUS API] Successfully drained ${drainedCount} active SSE streams ✓`);
+
+    // 3. Gracefully close PostgreSQL connection pools
+    await Promise.allSettled([
+      db.end(),
+      readDb !== db ? readDb.end() : Promise.resolve(),
+    ]);
+    logger.info('[ARGUS API] PostgreSQL connection pools terminated ✓');
+
+    // 4. Gracefully disconnect Redis client
+    if (redisClient) {
+      try {
+        await redisClient.quit();
+      } catch {
+        redisClient.disconnect();
+      }
+      logger.info('[ARGUS API] Redis client disconnected ✓');
+    }
+
+    clearTimeout(shutdownTimeout);
+    logger.info('[ARGUS API] Graceful shutdown completed cleanly. Exiting.');
+    if (process.env.NODE_ENV !== 'test') {
+      process.exit(0);
+    }
+  } catch (err) {
+    logger.error({ err }, '[ARGUS API] Error during graceful shutdown sequence');
+    if (process.env.NODE_ENV !== 'test') {
+      process.exit(1);
+    }
+  }
+}
+
 async function bootstrap() {
   await testConnection();
-  app.listen(PORT, () => {
+  serverInstance = app.listen(PORT, () => {
     logger.info(`[ARGUS API] Listening on port ${PORT} (${IS_PRODUCTION ? 'production' : 'development'})`);
     if (ALLOW_DEV_AUTH) {
       logger.warn('[ARGUS API] ALLOW_DEV_AUTH=true — X-User-Id header auth is enabled. Never use in production!');
     }
   });
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
-export { app };
+export { app, serverInstance };
 
 if (process.env.NODE_ENV !== 'test') {
   bootstrap().catch((err) => {

@@ -48,6 +48,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
           selector: 'node',
           style: {
             shape: 'round-rectangle',
+            'corner-radius': '8px',
             width: 240,
             height: 'label',
             padding: '16px',
@@ -57,7 +58,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             'border-opacity': 1,
             color: '#2B2622',
             'font-family': 'Crimson Pro, serif',
-            'font-size': '14px',
+            'font-size': '14.5px',
             'line-height': 1.35,
             'text-wrap': 'wrap',
             'text-max-width': '210px',
@@ -72,69 +73,78 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         {
           selector: 'node[edgeType = "root"]',
           style: {
-            'border-color': '#B8892B',
-            'border-width': 3,
+            'border-color': '#8F6414',
+            'border-width': 2.5,
+            'corner-radius': '10px',
             'font-family': 'Cinzel, serif',
-            'font-size': '14.5px',
+            'font-size': '14px',
+            'font-weight': 'bold',
             'background-color': '#FFFDF8',
           },
         },
         {
           selector: 'node[edgeType = "supports"]',
           style: {
-            'border-color': '#6E7B4A',
+            'border-color': '#5B693A',
+            'border-width': 2,
           },
         },
         {
           selector: 'node[edgeType = "refutes"]',
           style: {
-            'border-color': '#A2472E',
+            'border-color': '#9B3333',
+            'border-width': 2,
           },
         },
         {
           selector: 'node[edgeType = "clarifies"]',
           style: {
             'border-color': '#2E5C7A',
+            'border-width': 2,
           },
         },
         {
           selector: 'node[edgeType = "evidence"]',
           style: {
-            'border-color': '#B8892B',
+            'border-color': '#8F6414',
             'border-style': 'dashed',
+            'border-width': 2,
           },
         },
         {
           selector: 'node:selected',
           style: {
-            'border-color': '#B8892B',
-            'border-width': 4,
+            'border-color': '#8F6414',
+            'border-width': 3,
             'background-color': '#FFFDF8',
+            'underlay-color': 'rgba(143, 100, 20, 0.15)',
+            'underlay-padding': '4px',
+            'underlay-opacity': 1,
           },
         },
         {
           selector: 'edge',
           style: {
-            width: 2.5,
-            'curve-style': 'straight',
+            width: 2.2,
+            'curve-style': 'bezier',
             'target-arrow-shape': 'triangle',
-            'arrow-scale': 1.2,
-            opacity: 0.9,
+            'arrow-scale': 1.15,
+            opacity: 0.92,
             'z-index': 1,
           },
         },
         {
           selector: 'edge[type = "supports"]',
           style: {
-            'line-color': '#6E7B4A',
-            'target-arrow-color': '#6E7B4A',
+            'line-color': '#5B693A',
+            'target-arrow-color': '#5B693A',
           },
         },
         {
           selector: 'edge[type = "refutes"]',
           style: {
-            'line-color': '#A2472E',
-            'target-arrow-color': '#A2472E',
+            'line-color': '#9B3333',
+            'target-arrow-color': '#9B3333',
           },
         },
         {
@@ -147,8 +157,8 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         {
           selector: 'edge[type = "evidence"]',
           style: {
-            'line-color': '#B8892B',
-            'target-arrow-color': '#B8892B',
+            'line-color': '#8F6414',
+            'target-arrow-color': '#8F6414',
             'line-style': 'dashed',
           },
         },
@@ -350,22 +360,22 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         style={{
           width: '100%',
           height: '100%',
-          background: 'var(--marble)',
+          background: 'transparent',
           cursor: 'grab',
         }}
       />
 
-      {/* Canvas Controls */}
-      <div className="zoom-ctrl">
-        <button onClick={handleZoomIn} title="Zoom In">+</button>
-        <button onClick={handleZoomOut} title="Zoom Out">−</button>
-        <button onClick={handleResetZoom} title="Fit to Screen" style={{ fontSize: '11px' }}>⟲</button>
+      {/* Canvas Controls — Positioned neatly above the Radar minimap */}
+      <div className="zoom-ctrl" aria-label="Graph navigation controls">
+        <button onClick={handleZoomIn} title="Zoom In (+)">+</button>
+        <button onClick={handleZoomOut} title="Zoom Out (−)">−</button>
+        <button onClick={handleResetZoom} title="Fit Graph to Screen (Reset)">⟲</button>
         <button
           onClick={handleAutoLayout}
           title="Auto-organize DAG layout with Cytoscape Dagre"
-          style={{ fontSize: '10px', fontWeight: 600, padding: '0 6px', width: 'auto' }}
+          style={{ fontSize: '10.5px', fontWeight: 700, padding: '0 6px', width: 'auto', letterSpacing: '0.02em' }}
         >
-          Auto Layout
+          Layout
         </button>
       </div>
 

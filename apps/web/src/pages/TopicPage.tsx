@@ -5,7 +5,6 @@ import { GraphCanvas } from '../components/GraphCanvas';
 import { SidePanel } from '../components/SidePanel';
 import { Legend } from '../components/Legend';
 import { Toast, ToastState } from '../components/Toast';
-import { AIAssistantModal, AIAnalysisResult } from '../components/AIAssistantModal';
 import { NodeSearchModal } from '../components/NodeSearchModal';
 import { AuthModal } from '../components/AuthModal';
 import { useTopicSSE } from '../hooks/useTopicSSE';
@@ -41,12 +40,6 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [cyInstance, setCyInstance] = useState<Core | null>(null);
-
-  // AI Assistant States
-  const [isAIModalOpen, setIsAIModalOpen] = useState(false);
-  const [aiAnalysis, setAiAnalysis] = useState<AIAnalysisResult | null>(null);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiError, setAiError] = useState<string | null>(null);
 
   // Diff View States
   const [otherTopics, setOtherTopics] = useState<TopicSummaryOption[]>([]);
@@ -201,31 +194,6 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
-
-  const handleAIAnalyze = async () => {
-    if (!topic) return;
-    setIsAIModalOpen(true);
-    setAiLoading(true);
-    setAiError(null);
-
-    try {
-      const res = await apiFetch(`/api/topics/${topic.id}/ai-analyze`, {
-        method: 'POST',
-      });
-
-      if (res.ok) {
-        const data: AIAnalysisResult = await res.json();
-        setAiAnalysis(data);
-      } else {
-        const errData = await res.json();
-        setAiError(errData.error || 'Failed to analyze topic graph.');
-      }
-    } catch (err: any) {
-      setAiError(err.message || 'Network error while requesting AI analysis.');
-    } finally {
-      setAiLoading(false);
-    }
-  };
 
   // Fetch list of topics for Diff comparison dropdown when entering Diff view
   useEffect(() => {
@@ -427,38 +395,19 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   }
 
   const selectedNode = topic?.nodes?.find((n) => n.id === selectedId) || null;
+  const isOwner = Boolean(currentUser && topic && topic.authorId === currentUser.id);
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Top Bar */}
-      <div style={{ background: 'var(--marble-panel)', padding: '6px 28px', borderBottom: '1px solid var(--marble-line)', display: 'flex', alignItems: 'center' }}>
-        <button
-          onClick={() => navigate('/')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            fontFamily: 'Inter, sans-serif',
-            fontSize: '12px',
-            color: 'var(--aegean)',
-            cursor: 'pointer',
-            fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px'
-          }}
-        >
-          ← All Debates
-        </button>
-      </div>
-
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--marble)' }}>
       <Header
         topicTitle={topic?.title || 'Argument Graph'}
         viewMode={viewMode}
         user={currentUser}
-        isLive={isLive}
+        isPrivate={topic?.isPrivate}
+        isOwner={isOwner}
+        onBack={() => navigate('/')}
         onSelectViewMode={handleSelectViewMode}
         onFork={handleFork}
-        onAIAnalyze={handleAIAnalyze}
         onOpenSearch={() => setIsSearchOpen(true)}
         onExport={handleExport}
         onSwitchUser={onSwitchUser}
@@ -660,6 +609,8 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
           <SidePanel
             selectedNode={selectedNode}
             currentUser={currentUser}
+            isOwner={isOwner}
+            onFork={handleFork}
             onVote={handleVote}
             onAddClaim={handleAddClaim}
             onEditClaim={handleEditClaim}
@@ -668,17 +619,6 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
           />
         )}
       </div>
-
-      {/* Gemini AI Assistant Analysis Modal */}
-      <AIAssistantModal
-        isOpen={isAIModalOpen}
-        topicTitle={topic?.title || ''}
-        analysis={aiAnalysis}
-        loading={aiLoading}
-        error={aiError}
-        onClose={() => setIsAIModalOpen(false)}
-        onSelectNode={handleSelectNode}
-      />
 
       {/* Ctrl+F Node Search Modal */}
       <NodeSearchModal

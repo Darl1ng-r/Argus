@@ -9,6 +9,7 @@ import {
 } from '../services/notificationService.js';
 import { requireAuth, sendError } from '../middleware/index.js';
 import { validateIdentifier, ValidationError } from '../utils/sanitizer.js';
+import { registerSseClient, unregisterSseClient } from '../services/sseManager.js';
 
 // ---------------------------------------------------------------------------
 // Shared Redis multiplexer for notification SSE — one subscriber per userId
@@ -136,6 +137,9 @@ router.get('/events', async (req: Request, res: Response) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
+    const connectionId = `sse-notif-${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    registerSseClient(connectionId, res, { userId });
+
     let seq = 0;
     const writeEvent = (type: string, payload: unknown) => {
       if (!res.writableEnded) {
@@ -162,6 +166,7 @@ router.get('/events', async (req: Request, res: Response) => {
 
     req.on('close', async () => {
       clearInterval(heartbeat);
+      unregisterSseClient(connectionId);
       await unsubscribeRedis();
       if (!res.writableEnded) res.end();
     });
