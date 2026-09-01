@@ -375,6 +375,60 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         selectedId={selectedId}
         onSelectNode={(id) => onSelectNode(id)}
       />
+
+      {/* Screen Reader & Keyboard Accessible Tree Outline Layer */}
+      <div
+        className="sr-only-tree"
+        role="tree"
+        aria-label="Debate claims argument tree"
+        tabIndex={0}
+      >
+        <div style={{ fontWeight: 700, marginBottom: '8px', fontFamily: 'Cinzel, serif', fontSize: '13px', color: 'var(--gold)' }}>
+          DEBATE GRAPH OUTLINE (KEYBOARD ACCESSIBLE)
+        </div>
+        {nodes.map((node, index) => {
+          const isSelected = node.id === selectedId;
+          const relation = node.edgeType === 'root' ? 'Root Claim' : `${node.edgeType} parent`;
+          return (
+            <div
+              key={node.id}
+              role="treeitem"
+              id={`sr-node-${node.id}`}
+              aria-selected={isSelected}
+              tabIndex={isSelected || (index === 0 && !selectedId) ? 0 : -1}
+              onClick={() => onSelectNode(node.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelectNode(node.id);
+                } else if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  const next = nodes[index + 1];
+                  if (next) {
+                    onSelectNode(next.id);
+                    document.getElementById(`sr-node-${next.id}`)?.focus();
+                  }
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  const prev = nodes[index - 1];
+                  if (prev) {
+                    onSelectNode(prev.id);
+                    document.getElementById(`sr-node-${prev.id}`)?.focus();
+                  }
+                }
+              }}
+              className="sr-tree-item"
+            >
+              <div>
+                <strong>[{relation.toUpperCase()}]</strong> {node.content}
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--ink-soft)' }}>
+                Support: {node.support} | Contest: {node.contest}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };

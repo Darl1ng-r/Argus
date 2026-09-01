@@ -94,7 +94,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   };
 
   return (
-    <aside>
+    <aside aria-label="Claim Details and Dialectic Discussion">
+      <div className="sheet-handle" aria-hidden="true" />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', paddingBottom: '10px', borderBottom: '1px solid var(--marble-line)' }}>
         <h2 style={{ margin: 0, padding: 0, border: 'none' }}>
           {selectedNode.edgeType === 'root' ? 'THE ROOT CLAIM' : 'SELECTED CLAIM'}

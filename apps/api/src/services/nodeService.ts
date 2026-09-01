@@ -217,77 +217,139 @@ export async function updateClaimNode(
 
 const NODE_DELETE_GRACE_PERIOD_MS = 15 * 60 * 1000;
 
+export interface DeleteNodeResult {
+  nodeId: string;
+  status: string;
+  strategy?: 'single' | 'reparent' | 'cascade';
+  reparentedCount?: number;
+  newParentId?: string | null;
+}
+
 export async function deleteClaimNode(
   topicId: string,
   nodeId: string,
   requestingUser: User,
-  byTopicOwner = false
-): Promise<{ nodeId: string; status: string }> {
-  const nodeRes = await db.query<{
-    author_id: string;
-    edge_type: string;
-    status: string;
-    created_at: Date;
-  }>(
-    'SELECT author_id, edge_type, status, created_at FROM nodes WHERE id = $1 AND topic_id = $2',
-    [nodeId, topicId]
-  );
+  byTopicOwner = false,
+  strategy: 'reparent' | 'cascade' | 'error' = 'error'
+): Promise<DeleteNodeResult> {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
 
-  if (nodeRes.rowCount === 0) {
-    throw new ValidationError(`Node not found: ${nodeId}`);
-  }
+    const nodeRes = await client.query<{
+      parent_id: string | null;
+      author_id: string;
+      edge_type: string;
+      status: string;
+      created_at: Date;
+    }>(
+      'SELECT parent_id, author_id, edge_type, status, created_at FROM nodes WHERE id = $1 AND topic_id = $2 FOR UPDATE',
+      [nodeId, topicId]
+    );
 
-  const { author_id, edge_type, status, created_at } = nodeRes.rows[0];
+    if (nodeRes.rowCount === 0) {
+      throw new ValidationError(`Node not found: ${nodeId}`);
+    }
 
-  if (edge_type === 'root') {
-    throw new ValidationError('Root nodes cannot be deleted. Delete the entire topic instead.');
-  }
+    const { parent_id, author_id, edge_type, status, created_at } = nodeRes.rows[0];
 
-  if (status !== 'ACTIVE') {
-    throw new ValidationError(`Node is already ${status} and cannot be deleted.`);
-  }
+    if (edge_type === 'root') {
+      throw new ValidationError('Root nodes cannot be deleted. Delete the entire topic instead.');
+    }
 
-  if (!byTopicOwner) {
-    // isAuthor = the requesting user IS the node's author (fix: was incorrectly inverted)
-    const isAuthor = requestingUser.id === author_id;
-    if (isAuthor) {
-      // Authors can only delete within the 15-minute grace period
-      const ageMs = Date.now() - new Date(created_at).getTime();
-      if (ageMs > NODE_DELETE_GRACE_PERIOD_MS) {
-        throw new ValidationError(
-          'Self-deletion window has passed. Claims older than 15 minutes cannot be deleted.'
+    if (status !== 'ACTIVE') {
+      throw new ValidationError(`Node is already ${status} and cannot be deleted.`);
+    }
+
+    if (!byTopicOwner) {
+      const isAuthor = requestingUser.id === author_id;
+      if (isAuthor) {
+        const ageMs = Date.now() - new Date(created_at).getTime();
+        if (ageMs > NODE_DELETE_GRACE_PERIOD_MS) {
+          throw new ValidationError(
+            'Self-deletion window has passed. Claims older than 15 minutes cannot be deleted.'
+          );
+        }
+      } else {
+        throw new ValidationError('Forbidden: you can only delete your own claims.');
+      }
+    }
+
+    const childRes = await client.query<{ id: string }>(
+      `SELECT id FROM nodes WHERE parent_id = $1 AND topic_id = $2 AND status = 'ACTIVE'`,
+      [nodeId, topicId]
+    );
+
+    const childCount = childRes.rowCount ?? 0;
+
+    if (childCount > 0) {
+      if (strategy === 'error') {
+        const err = new ValidationError(
+          `Cannot delete a claim with ${childCount} active replies without a strategy. Choose to reparent or cascade.`
+        );
+        (err as any).code = 'HAS_CHILDREN';
+        (err as any).childCount = childCount;
+        throw err;
+      }
+
+      if (strategy === 'reparent') {
+        // Elevate immediate active children to attach to this node's parent
+        await client.query(
+          `UPDATE nodes SET parent_id = $1 WHERE parent_id = $2 AND topic_id = $3 AND status = 'ACTIVE'`,
+          [parent_id, nodeId, topicId]
+        );
+      } else if (strategy === 'cascade') {
+        // Cascade delete: find all descendants in recursive CTE and mark them REMOVED
+        await client.query(
+          `WITH RECURSIVE descendants AS (
+             SELECT id FROM nodes WHERE parent_id = $1 AND topic_id = $2 AND status = 'ACTIVE'
+             UNION ALL
+             SELECT n.id
+             FROM nodes n
+             JOIN descendants d ON n.parent_id = d.id
+             WHERE n.topic_id = $2 AND n.status = 'ACTIVE'
+           )
+           UPDATE nodes
+           SET status = 'REMOVED'
+           WHERE id IN (SELECT id FROM descendants) AND topic_id = $2`,
+          [nodeId, topicId]
         );
       }
-    } else {
-      // Non-authors cannot delete nodes they didn't write
-      // (topic owners bypass this via requireTopicRole check at the route level)
-      throw new ValidationError('Forbidden: you can only delete your own claims.');
     }
-  }
 
-  const childCount = await db.query<{ count: string }>(
-    `SELECT COUNT(*) AS count FROM nodes WHERE parent_id = $1 AND topic_id = $2 AND status = 'ACTIVE'`,
-    [nodeId, topicId]
-  );
-  if (parseInt(childCount.rows[0].count, 10) > 0) {
-    throw new ValidationError(
-      'Cannot delete a claim that has active replies. Remove all child claims first.'
+    // Mark the target node as REMOVED
+    const updateRes = await client.query(
+      `UPDATE nodes SET status = 'REMOVED' WHERE id = $1 AND topic_id = $2 RETURNING id, status`,
+      [nodeId, topicId]
     );
+
+    if (updateRes.rowCount === 0) {
+      throw new ValidationError(`Node not found: ${nodeId}`);
+    }
+
+    await client.query('COMMIT');
+
+    await invalidateTopicCache(topicId);
+    emitTopicMutation(topicId, 'node_deleted', {
+      nodeId,
+      status: 'REMOVED',
+      strategy: childCount > 0 ? strategy : 'single',
+      newParentId: strategy === 'reparent' ? parent_id : null,
+    });
+
+    return {
+      nodeId,
+      status: 'REMOVED',
+      strategy: childCount > 0 ? strategy : 'single',
+      reparentedCount: strategy === 'reparent' ? childCount : 0,
+      newParentId: strategy === 'reparent' ? parent_id : null,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
-
-  const updateRes = await db.query(
-    `UPDATE nodes SET status = 'REMOVED' WHERE id = $1 AND topic_id = $2 RETURNING id, status`,
-    [nodeId, topicId]
-  );
-
-  if (updateRes.rowCount === 0) {
-    throw new ValidationError(`Node not found: ${nodeId}`);
-  }
-
-  await invalidateTopicCache(topicId);
-  emitTopicMutation(topicId, 'node_deleted', { nodeId, status: 'REMOVED' });
-
-  return { nodeId, status: 'REMOVED' };
 }
 
 export async function getNodeVersionHistory(nodeId: string): Promise<import('./graphTypes.js').NodeVersion[]> {

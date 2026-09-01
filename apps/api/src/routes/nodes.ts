@@ -260,16 +260,30 @@ router.delete(
       const topicId = validateIdentifier(req.params.id, 'topicId');
       const nodeId = validateIdentifier(req.params.nodeId, 'nodeId');
 
+      const strategyParam = (req.query.strategy as string)?.toLowerCase();
+      const strategy = ['reparent', 'cascade'].includes(strategyParam)
+        ? (strategyParam as 'reparent' | 'cascade')
+        : 'error';
+
       // Topic owners can delete any node at any time (bypass grace-period).
       // Regular contributors can only delete their own claims within 15 minutes.
       const { getUserTopicRole } = await import('../services/graphService.js');
       const userRole = await getUserTopicRole(topicId, req.user!.id);
       const isTopicOwner = userRole === 'owner';
 
-      const result = await deleteClaimNode(topicId, nodeId, req.user!, isTopicOwner);
+      const result = await deleteClaimNode(topicId, nodeId, req.user!, isTopicOwner, strategy);
       res.json(result);
-    } catch (err) {
-      if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    } catch (err: any) {
+      if (err instanceof ValidationError) {
+        if (err.code === 'HAS_CHILDREN') {
+          return res.status(409).json({
+            error: err.message,
+            code: 'HAS_CHILDREN',
+            childCount: err.childCount,
+          });
+        }
+        return res.status(400).json({ error: err.message });
+      }
       sendError(res, 500, err instanceof Error ? err.message : 'Unknown error', err);
     }
   }

@@ -7,6 +7,7 @@ import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { User } from './types';
 import { getAuthToken, apiFetch } from './utils/auth';
 import { I18nProvider } from './i18n';
+import { OfflineIndicator } from './components/OfflineIndicator';
 
 // Fix #17 — Code splitting: TopicPage (+ Cytoscape.js ~500KB) is loaded lazily
 // only when the user navigates to a topic route.
@@ -95,6 +96,7 @@ export const App: React.FC = () => {
 
   return (
     <I18nProvider>
+      <OfflineIndicator />
       <Router>
         <Suspense fallback={<GraphLoadingFallback />}>
           <Routes>
