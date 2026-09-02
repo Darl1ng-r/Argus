@@ -219,10 +219,10 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onUserChanged }) => {
         {/* Banner Section */}
         <div style={{ textAlign: 'center', marginBottom: '36px' }}>
           <h2 style={{ fontFamily: 'Cinzel, serif', fontSize: '26px', letterSpacing: '0.1em', marginBottom: '10px' }}>
-            DEBATES ARE DIRECTED GRAPHS, NOT THREADS
+            SEE EVERY SIDE OF THE ARGUMENT
           </h2>
           <p style={{ fontFamily: 'Crimson Pro, serif', fontSize: '18px', color: 'var(--ink-soft)', maxWidth: '640px', margin: '0 auto 24px', lineHeight: 1.45 }}>
-            Explore open arguments, inspect evidence, vote on claims, and surface the steelman reasoning.
+            Break free from linear noise. Explore interactive dialectical maps built on evidence, logic, and truth.
           </p>
 
           {/* Search Input */}
