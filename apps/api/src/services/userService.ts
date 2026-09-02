@@ -6,13 +6,14 @@ const ROLE_RANK: Record<TopicRole, number> = {
   owner: 3,
   contributor: 2,
   viewer: 1,
+  none: 0,
 };
 
 /**
- * Checks if a user's role on a topic meets or exceeds the required role rank.
+ * Checks if a user's role satisfies the required minimum role.
  */
 export function hasRequiredRole(userRole: TopicRole | null, requiredRole: TopicRole): boolean {
-  if (!userRole) return false;
+  if (!userRole || userRole === 'none') return false;
   return ROLE_RANK[userRole] >= ROLE_RANK[requiredRole];
 }
 
@@ -20,34 +21,43 @@ export function hasRequiredRole(userRole: TopicRole | null, requiredRole: TopicR
  * Resolves a user's role for a specific topic.
  * - Topic author is automatically 'owner'.
  * - Explicit entry in topic_members table is returned if present.
- * - Non-owner users are 'viewer' (can view, vote, and fork to their own profile to edit).
- * - Anonymous users are 'viewer'.
+ * - For private topics, non-members receive 'none' (strict privacy).
+ * - For public topics, non-owners receive 'viewer' (can view, vote, and fork to edit).
  */
 export async function getUserTopicRole(
   topicId: string,
   userId?: string
 ): Promise<TopicRole> {
-  if (!userId) return 'viewer';
-
-  // Check explicit role in topic_members
-  const memberRes = await db.query<{ role: TopicRole }>(
-    'SELECT role FROM topic_members WHERE topic_id = $1 AND user_id = $2',
-    [topicId, userId]
-  );
-  if (memberRes.rowCount! > 0) {
-    return memberRes.rows[0].role;
-  }
-
-  // Check if topic author
-  const topicRes = await db.query<{ author_id: string }>(
-    'SELECT author_id FROM topics WHERE id = $1',
+  const topicRes = await db.query<{ author_id: string; is_private: boolean }>(
+    'SELECT author_id, is_private FROM topics WHERE id = $1',
     [topicId]
   );
-  if (topicRes.rowCount! > 0 && topicRes.rows[0].author_id === userId) {
-    return 'owner';
+  if (topicRes.rowCount === 0) {
+    return 'none';
   }
 
-  // GitHub-style model: other users are 'viewer' (must fork to modify)
+  const topic = topicRes.rows[0];
+
+  if (userId) {
+    if (topic.author_id === userId) {
+      return 'owner';
+    }
+
+    const memberRes = await db.query<{ role: TopicRole }>(
+      'SELECT role FROM topic_members WHERE topic_id = $1 AND user_id = $2',
+      [topicId, userId]
+    );
+    if (memberRes.rowCount! > 0) {
+      return memberRes.rows[0].role;
+    }
+  }
+
+  // Strict Privacy: Non-members have NO role on private debates
+  if (topic.is_private) {
+    return 'none';
+  }
+
+  // GitHub-style model: Public debates grant 'viewer' role to all
   return 'viewer';
 }
 

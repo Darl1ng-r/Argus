@@ -73,7 +73,7 @@ export interface User {
   anonymizedAt?: string | null;
 }
 
-export type TopicRole = 'owner' | 'contributor' | 'viewer';
+export type TopicRole = 'owner' | 'contributor' | 'viewer' | 'none';
 
 export interface TopicMember {
   topicId: string;

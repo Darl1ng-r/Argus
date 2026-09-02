@@ -51,7 +51,8 @@ describe('Performance Fix: CTE Row Limit & Memory Protection', () => {
       return { rowCount: 0, rows: [] } as any;
     });
 
-    const topic = await getTopicSubgraph('large-topic', undefined, 5);
+    const uniqueTopicId = `large-topic-${Date.now()}`;
+    const topic = await getTopicSubgraph(uniqueTopicId, undefined, 5);
 
     expect(topic).not.toBeNull();
     // Verify that the executed SQL query contains bounded_tree or LIMIT parameter for row cap

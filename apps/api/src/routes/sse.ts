@@ -37,11 +37,12 @@ interface TopicSubscription {
 
 /** Module-level map: topicId → shared subscriber + callback set. */
 const topicSubscriptions = new Map<string, TopicSubscription>();
+/** In-flight pending subscription promises to prevent race conditions during concurrent connections. */
+const pendingSubscriptions = new Map<string, Promise<TopicSubscription>>();
 
 /**
  * Registers a callback for Redis Pub/Sub events on a topic.
- * Creates the shared subscriber on first client; tears it down after last client leaves.
- * Returns an async cleanup function to call on disconnect.
+ * Uses mutex-locked single-flight promise to eliminate race conditions under concurrent connects.
  */
 async function subscribeToTopicRedis(
   topicId: string,
@@ -54,30 +55,43 @@ async function subscribeToTopicRedis(
   let sub = topicSubscriptions.get(topicId);
 
   if (!sub) {
-    const redis = new Redis(process.env.REDIS_URL, {
-      maxRetriesPerRequest: null,
-      enableReadyCheck: false,
-      lazyConnect: true,
-    });
+    let pending = pendingSubscriptions.get(topicId);
+    if (!pending) {
+      pending = (async () => {
+        const redis = new Redis(process.env.REDIS_URL!, {
+          maxRetriesPerRequest: null,
+          enableReadyCheck: false,
+          lazyConnect: true,
+        });
 
-    const callbacks = new Set<MessageCallback>();
-    sub = { redis, callbacks };
-    topicSubscriptions.set(topicId, sub);
+        const callbacks = new Set<MessageCallback>();
+        const newSub: TopicSubscription = { redis, callbacks };
 
-    await redis.subscribe(topicPubSubChannel(topicId));
+        await redis.subscribe(topicPubSubChannel(topicId));
 
-    redis.on('message', (_ch: string, raw: string) => {
-      try {
-        const event: TopicMutationEvent = JSON.parse(raw);
-        for (const cb of callbacks) cb(event);
-      } catch {
-        // Ignore malformed Pub/Sub messages
-      }
-    });
+        redis.on('message', (_ch: string, raw: string) => {
+          try {
+            const event: TopicMutationEvent = JSON.parse(raw);
+            for (const cb of newSub.callbacks) cb(event);
+          } catch {
+            // Ignore malformed Pub/Sub messages
+          }
+        });
 
-    redis.on('error', () => {
-      // Non-fatal — local EventEmitter still delivers same-instance events
-    });
+        redis.on('error', (err) => {
+          console.error(`[SSE Redis] Error on topic ${topicId}:`, err?.message || err);
+        });
+
+        topicSubscriptions.set(topicId, newSub);
+        return newSub;
+      })().finally(() => {
+        pendingSubscriptions.delete(topicId);
+      });
+
+      pendingSubscriptions.set(topicId, pending);
+    }
+
+    sub = await pending;
   }
 
   sub.callbacks.add(callback);
@@ -99,21 +113,66 @@ async function subscribeToTopicRedis(
 }
 
 // ---------------------------------------------------------------------------
-// Connection tracking
+// Connection tracking with Memory Leak Protection
 // ---------------------------------------------------------------------------
 const openConnections = new Map<string, number>();
 const ipConnections = new Map<string, number>();
-const MAX_SSE_PER_IP = 25;
+const userConnections = new Map<string, number>();
+
+const MAX_SSE_PER_IP = 100;
+const MAX_SSE_PER_USER = 20;
 
 export async function topicSseHandler(req: Request, res: Response): Promise<void> {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
     const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+    const userId = req.user?.id;
 
-    const currentIpCount = ipConnections.get(clientIp) ?? 0;
-    if (currentIpCount >= MAX_SSE_PER_IP) {
-      res.status(429).json({ error: 'Too many concurrent real-time connections from this IP. Please close unused tabs.' });
+    // 1. Privacy Guard: Verify topic existence and access permissions
+    const { db } = await import('../db.js');
+    const topicRes = await db.query<{ author_id: string; is_private: boolean }>(
+      'SELECT author_id, is_private FROM topics WHERE id = $1',
+      [topicId]
+    );
+
+    if (topicRes.rowCount === 0) {
+      res.status(404).json({ error: 'Topic not found.' });
       return;
+    }
+
+    const topicRow = topicRes.rows[0];
+    if (topicRow.is_private) {
+      if (!userId) {
+        res.status(404).json({ error: 'Topic not found.' });
+        return;
+      }
+      if (topicRow.author_id !== userId) {
+        const memberRes = await db.query(
+          'SELECT 1 FROM topic_members WHERE topic_id = $1 AND user_id = $2',
+          [topicId, userId]
+        );
+        if (memberRes.rowCount === 0) {
+          res.status(404).json({ error: 'Topic not found.' });
+          return;
+        }
+      }
+    }
+
+    // 2. Safe Connection Limits (User-scoped when authenticated, IP-scoped when guest)
+    if (userId) {
+      const userCount = userConnections.get(userId) ?? 0;
+      if (userCount >= MAX_SSE_PER_USER) {
+        res.status(429).json({ error: 'Too many concurrent real-time connections for this account.' });
+        return;
+      }
+      userConnections.set(userId, userCount + 1);
+    } else {
+      const ipCount = ipConnections.get(clientIp) ?? 0;
+      if (ipCount >= MAX_SSE_PER_IP) {
+        res.status(429).json({ error: 'Too many concurrent real-time connections from this network.' });
+        return;
+      }
+      ipConnections.set(clientIp, ipCount + 1);
     }
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -126,7 +185,6 @@ export async function topicSseHandler(req: Request, res: Response): Promise<void
     registerSseClient(connectionId, res, { topicId });
 
     openConnections.set(topicId, (openConnections.get(topicId) ?? 0) + 1);
-    ipConnections.set(clientIp, currentIpCount + 1);
     activeSseConnectionsGauge.inc();
 
     let eventSeq = 0;
@@ -160,8 +218,22 @@ export async function topicSseHandler(req: Request, res: Response): Promise<void
       unregisterSseClient(connectionId);
       topicEvents.removeListener(localChannel, onLocalMutation);
       await unsubscribeRedis();
-      openConnections.set(topicId, Math.max(0, (openConnections.get(topicId) ?? 1) - 1));
-      ipConnections.set(clientIp, Math.max(0, (ipConnections.get(clientIp) ?? 1) - 1));
+
+      // Memory leak prevention: Delete keys when counter reaches zero
+      const remTopic = (openConnections.get(topicId) ?? 1) - 1;
+      if (remTopic <= 0) openConnections.delete(topicId);
+      else openConnections.set(topicId, remTopic);
+
+      if (userId) {
+        const remUser = (userConnections.get(userId) ?? 1) - 1;
+        if (remUser <= 0) userConnections.delete(userId);
+        else userConnections.set(userId, remUser);
+      } else {
+        const remIp = (ipConnections.get(clientIp) ?? 1) - 1;
+        if (remIp <= 0) ipConnections.delete(clientIp);
+        else ipConnections.set(clientIp, remIp);
+      }
+
       activeSseConnectionsGauge.dec();
       if (!res.writableEnded) res.end();
     });

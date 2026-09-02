@@ -101,4 +101,37 @@ describe('SRE & Performance Optimizations Suite', () => {
       expect(found).toContain('idx_topics_feed_perf');
     });
   });
+
+  describe('Single-Flight Mutex Deduplication', () => {
+    it('deduplicates 20 concurrent cache misses into exactly 1 computation', async () => {
+      let callCount = 0;
+      const slowComputeFn = vi.fn(async () => {
+        callCount++;
+        await new Promise((r) => setTimeout(r, 20));
+        return { result: 'single_flight_data', count: callCount };
+      });
+
+      const key = `test:single_flight:${Date.now()}`;
+      const concurrentRequests = Array.from({ length: 20 }, () =>
+        getOrSetXFetch(key, 10, slowComputeFn)
+      );
+
+      const results = await Promise.all(concurrentRequests);
+
+      // All 20 requests should receive identical result
+      for (const res of results) {
+        expect(res).toEqual({ result: 'single_flight_data', count: 1 });
+      }
+      expect(slowComputeFn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('Private Topic RBAC Strictness', () => {
+    it('returns "none" role for unauthorized users on private topics', async () => {
+      const { getUserTopicRole } = await import('../services/userService.js');
+      // For a non-existent or mock private topic with an unauthorized user
+      const role = await getUserTopicRole('non-existent-topic', 'stranger-user-id');
+      expect(role).toBe('none');
+    });
+  });
 });

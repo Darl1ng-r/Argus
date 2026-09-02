@@ -69,9 +69,9 @@ describe('New Improvements & Security Fixes Tests', () => {
   });
 
   describe('F-7: GET /api/topics/:id/steelman endpoint', () => {
-    it('returns HTTP 200 or 500 depending on DB connection with topicId parameter', async () => {
+    it('returns HTTP 200, 404 or 500 depending on DB connection with topicId parameter', async () => {
       const res = await request(app).get('/api/topics/topic-123/steelman');
-      expect([200, 500]).toContain(res.status);
+      expect([200, 404, 500]).toContain(res.status);
       if (res.status === 200) {
         expect(res.body).toHaveProperty('topicId', 'topic-123');
         expect(res.body).toHaveProperty('nodes');

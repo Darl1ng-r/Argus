@@ -180,8 +180,20 @@ router.get('/:id/steelman', async (req: Request, res: Response) => {
   try {
     const topicId = validateIdentifier(req.params.id, 'topicId');
     const currentUserId = req.user?.id;
+
+    // Privacy verification
+    const { getUserTopicRole } = await import('../services/graphService.js');
+    const userRole = await getUserTopicRole(topicId, currentUserId);
+    if (userRole === 'none') {
+      return res.status(404).json({ error: 'Topic not found.' });
+    }
+
     const nodes = await getSteelmanPath(topicId, currentUserId);
-    res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=30');
+    if (currentUserId) {
+      res.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    } else {
+      res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=30');
+    }
     res.json({ topicId, nodes });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });

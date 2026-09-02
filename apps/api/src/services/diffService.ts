@@ -5,6 +5,7 @@ import { ValidationError } from '../utils/sanitizer.js';
 export interface GraphDiffResult {
   baseTopicId: string;
   compareTopicId: string;
+  hasDirectLineage: boolean;
   diff: {
     addedNodes: ClaimNode[];
     removedNodes: ClaimNode[];
@@ -24,6 +25,13 @@ export async function compareTopicForks(
 
   if (!baseTopic) throw new ValidationError(`Base topic not found: ${baseTopicId}`);
   if (!compareTopic) throw new ValidationError(`Comparison topic not found: ${compareTopicId}`);
+
+  const hasDirectLineage = Boolean(
+    baseTopic.forkedFromId === compareTopic.id ||
+    compareTopic.forkedFromId === baseTopic.id ||
+    (baseTopic.forkedFromId && baseTopic.forkedFromId === compareTopic.forkedFromId) ||
+    baseTopic.id === compareTopic.id
+  );
 
   const compareContentMap = new Map<string, ClaimNode>();
   for (const node of compareTopic.nodes) {
@@ -58,6 +66,7 @@ export async function compareTopicForks(
   return {
     baseTopicId,
     compareTopicId,
+    hasDirectLineage,
     diff: {
       addedNodes,
       removedNodes,
