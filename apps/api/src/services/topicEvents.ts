@@ -13,6 +13,7 @@ export interface TopicMutationEvent {
   type:
     | 'node_added'
     | 'node_voted'
+    | 'vote_delta'
     | 'node_updated'
     | 'node_deleted'
     | 'node_steelman_toggled'

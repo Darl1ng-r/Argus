@@ -571,32 +571,44 @@ export async function getTopicFlatNodes(topicId: string): Promise<ClaimNode[]> {
 }
 
 export async function getSteelmanPath(topicId: string, currentUserId?: string): Promise<ClaimNode[]> {
-  const res = await readDb.query(
-    `SELECT
-       n.id, n.parent_id, n.author_id, u.username AS author_username,
-       n.edge_type, n.pos_x, n.pos_y, n.content,
-       n.support_score, n.contest_score, n.is_steel, n.created_at,
-       FALSE AS has_more_children
-     FROM nodes n
-     LEFT JOIN users u ON u.id = n.author_id
-     WHERE n.topic_id = $1 AND n.status = 'ACTIVE' AND n.is_steel = TRUE
-     ORDER BY n.support_score DESC`,
-    [topicId]
-  );
+  const cacheKey = `topic:steelman:${topicId}`;
+  let baseNodes = await getCached<ClaimNode[]>(cacheKey);
 
-  let userVoteMap: Map<string, 'support' | 'contest'> | undefined;
-  if (currentUserId) {
-    userVoteMap = new Map();
-    const votesRes = await db.query<{ node_id: string; vote_type: string }>(
-      `SELECT node_id, vote_type FROM votes WHERE user_id = $1 AND node_id = ANY($2::text[])`,
-      [currentUserId, res.rows.map((r) => r.id)]
+  if (!baseNodes) {
+    const res = await readDb.query(
+      `SELECT
+         n.id, n.parent_id, n.author_id, u.username AS author_username,
+         n.edge_type, n.pos_x, n.pos_y, n.content,
+         n.support_score, n.contest_score, n.is_steel, n.created_at,
+         FALSE AS has_more_children
+       FROM nodes n
+       LEFT JOIN users u ON u.id = n.author_id
+       WHERE n.topic_id = $1 AND n.status = 'ACTIVE' AND (n.is_steel = TRUE OR n.parent_id IS NULL)
+       ORDER BY n.support_score DESC`,
+      [topicId]
     );
-    for (const v of votesRes.rows) {
-      userVoteMap.set(v.node_id, v.vote_type.toLowerCase() as 'support' | 'contest');
-    }
+
+    baseNodes = res.rows.map((row) => rowToNode(row as Record<string, unknown>));
+    await setCached(cacheKey, baseNodes, 300);
   }
 
-  return res.rows.map((row) => rowToNode(row as Record<string, unknown>, userVoteMap));
+  if (!currentUserId || baseNodes.length === 0) {
+    return baseNodes;
+  }
+
+  const userVoteMap = new Map<string, 'support' | 'contest'>();
+  const votesRes = await readDb.query<{ node_id: string; vote_type: string }>(
+    `SELECT node_id, vote_type FROM votes WHERE user_id = $1 AND node_id = ANY($2::text[])`,
+    [currentUserId, baseNodes.map((n) => n.id)]
+  );
+  for (const v of votesRes.rows) {
+    userVoteMap.set(v.node_id, v.vote_type.toLowerCase() as 'support' | 'contest');
+  }
+
+  return baseNodes.map((node) => ({
+    ...node,
+    userVote: userVoteMap.get(node.id) || null,
+  }));
 }
 
 export async function updateRootClaim(topicId: string, newContent: string): Promise<ClaimNode> {

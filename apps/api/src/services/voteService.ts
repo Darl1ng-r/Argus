@@ -152,6 +152,11 @@ export async function voteNode(
     };
 
     await invalidateTopicCache(topicId);
+    emitTopicMutation(topicId, 'vote_delta', {
+      nodeId: nodeRow.id,
+      support: Number(updatedScores.support_score),
+      contest: Number(updatedScores.contest_score),
+    });
     emitTopicMutation(topicId, 'node_voted', node);
 
     if (newUserVote !== null && nodeAuthorId !== user.id) {

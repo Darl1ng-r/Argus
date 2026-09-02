@@ -37,7 +37,7 @@ export async function getCached<T>(key: string): Promise<T | null> {
 
 /**
  * Sets a JSON object in Redis with a TTL in seconds.
- * Fix P-3: Optionally associates the key with a topic tag set for O(1) bulk invalidation.
+ * Optionally associates the key with a topic tag set for O(1) bulk invalidation.
  */
 export async function setCached(
   key: string,
@@ -50,7 +50,6 @@ export async function setCached(
     const pipeline = redisClient.pipeline();
     pipeline.setex(key, ttlSeconds, JSON.stringify(data));
     if (tagOrTopicId) {
-      // Track this key under the tag set so invalidation never needs SCAN
       const tagKey = tagOrTopicId.startsWith('cache-tag:')
         ? tagOrTopicId
         : tagOrTopicId.startsWith('topic:')
@@ -63,6 +62,111 @@ export async function setCached(
   } catch (err) {
     // Ignore cache write errors — cache is best-effort
   }
+}
+
+/**
+ * Structure for XFetch Probabilistic Early Expiration metadata
+ */
+interface XFetchEnvelope<T> {
+  val: T;
+  delta: number; // Time in ms it took to compute the value
+  expireAt: number; // Timestamp when TTL expires
+}
+
+// Module-level Single-Flight Mutex Map: Prevents duplicate background/foreground queries on the same key
+const inFlightRefreshes = new Map<string, Promise<unknown>>();
+
+/**
+ * Gets or computes a value using the Optimal Probabilistic Cache Regeneration (XFetch) algorithm
+ * with Single-Flight Mutex deduplication.
+ * Prevents Cache Stampedes / Thundering Herd effects on hot keys by probabilistically
+ * refreshing the cache in the background with at most ONE concurrent worker.
+ */
+export async function getOrSetXFetch<T>(
+  key: string,
+  ttlSeconds: number,
+  computeFn: () => Promise<T>,
+  beta = 1.0,
+  tagOrTopicId?: string
+): Promise<T> {
+  if (!redisClient) {
+    // Single-flight in-memory fallback even when Redis is offline
+    if (inFlightRefreshes.has(key)) {
+      return inFlightRefreshes.get(key) as Promise<T>;
+    }
+    const computePromise = computeFn().finally(() => {
+      inFlightRefreshes.delete(key);
+    });
+    inFlightRefreshes.set(key, computePromise);
+    return computePromise;
+  }
+
+  try {
+    const raw = await redisClient.get(key);
+    if (raw) {
+      const envelope = JSON.parse(raw) as XFetchEnvelope<T>;
+      const remainingMs = envelope.expireAt - Date.now();
+
+      // XFetch Early Expiration condition: remaining < -beta * delta * ln(random())
+      const shouldEarlyRefresh =
+        remainingMs > 0 &&
+        remainingMs <= -beta * envelope.delta * Math.log(Math.random() || 0.0001);
+
+      if (shouldEarlyRefresh && !inFlightRefreshes.has(key)) {
+        // Asynchronously refresh in background with exactly ONE single-flight worker
+        const startTime = Date.now();
+        const refreshPromise = computeFn()
+          .then(async (fresh) => {
+            const computeTimeMs = Date.now() - startTime;
+            const newEnvelope: XFetchEnvelope<T> = {
+              val: fresh,
+              delta: Math.max(1, computeTimeMs),
+              expireAt: Date.now() + ttlSeconds * 1000,
+            };
+            await setCached(key, newEnvelope, ttlSeconds, tagOrTopicId);
+            return fresh;
+          })
+          .catch((err) => {
+            console.error(`[XFetch] Background refresh error for key "${key}":`, err?.message || err);
+          })
+          .finally(() => {
+            inFlightRefreshes.delete(key);
+          });
+
+        inFlightRefreshes.set(key, refreshPromise);
+      }
+
+      if (remainingMs > 0) {
+        return envelope.val;
+      }
+    }
+  } catch (err) {
+    // Fall back to computeFn if Redis read fails
+  }
+
+  // Cache miss or hard expired: compute with Single-Flight deduplication
+  if (inFlightRefreshes.has(key)) {
+    return inFlightRefreshes.get(key) as Promise<T>;
+  }
+
+  const startTime = Date.now();
+  const computePromise = computeFn()
+    .then(async (fresh) => {
+      const computeTimeMs = Date.now() - startTime;
+      const envelope: XFetchEnvelope<T> = {
+        val: fresh,
+        delta: Math.max(1, computeTimeMs),
+        expireAt: Date.now() + ttlSeconds * 1000,
+      };
+      await setCached(key, envelope, ttlSeconds, tagOrTopicId);
+      return fresh;
+    })
+    .finally(() => {
+      inFlightRefreshes.delete(key);
+    });
+
+  inFlightRefreshes.set(key, computePromise);
+  return computePromise;
 }
 
 /**

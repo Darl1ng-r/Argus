@@ -5,6 +5,7 @@ interface UseTopicSSEOptions {
   topicId?: string;
   onNodeAdded?: (newNode: ClaimNode) => void;
   onNodeVoted?: (updatedNode: ClaimNode) => void;
+  onVoteDelta?: (delta: { nodeId: string; support: number; contest: number }) => void;
   onNodeUpdated?: (updatedNode: ClaimNode) => void;
   onNodeDeleted?: (nodeId: string) => void;
   onRootUpdated?: (updatedRoot: ClaimNode) => void;
@@ -15,6 +16,7 @@ export function useTopicSSE({
   topicId,
   onNodeAdded,
   onNodeVoted,
+  onVoteDelta,
   onNodeUpdated,
   onNodeDeleted,
   onRootUpdated,
@@ -38,6 +40,15 @@ export function useTopicSSE({
         onToast?.('Live: New claim added to graph.', 'info');
       } catch (err) {
         console.error('Failed to parse SSE node_added payload', err);
+      }
+    });
+
+    eventSource.addEventListener('vote_delta', (e: MessageEvent) => {
+      try {
+        const delta: { nodeId: string; support: number; contest: number } = JSON.parse(e.data);
+        onVoteDelta?.(delta);
+      } catch (err) {
+        console.error('Failed to parse SSE vote_delta payload', err);
       }
     });
 

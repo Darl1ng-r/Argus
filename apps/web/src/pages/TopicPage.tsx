@@ -131,6 +131,19 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
         return { ...prev, nodes: [...prev.nodes, newNode] };
       });
     }, []),
+    onVoteDelta: useCallback((delta: { nodeId: string; support: number; contest: number }) => {
+      setTopic((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          nodes: prev.nodes.map((n) =>
+            n.id === delta.nodeId
+              ? { ...n, support: delta.support, contest: delta.contest }
+              : n
+          ),
+        };
+      });
+    }, []),
     onNodeVoted: useCallback((updatedNode: ClaimNode) => {
       setTopic((prev) => {
         if (!prev) return null;

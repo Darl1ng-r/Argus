@@ -12,5 +12,24 @@ export default defineConfig({
         changeOrigin: true
       }
     }
-  }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (id.includes('node_modules/cytoscape') || id.includes('node_modules/cytoscape-dagre')) {
+            return 'vendor-cytoscape';
+          }
+          if (
+            id.includes('node_modules/react/') ||
+            id.includes('node_modules/react-dom/') ||
+            id.includes('node_modules/react-router')
+          ) {
+            return 'vendor-react';
+          }
+        },
+      },
+    },
+    chunkSizeWarningLimit: 600,
+  },
 });

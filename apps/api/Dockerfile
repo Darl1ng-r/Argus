@@ -12,12 +12,17 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-# Stage 2: Minimal Production Runtime
+# Stage 2: Minimal Production Runtime with jemalloc
 FROM node:20-alpine AS runner
 WORKDIR /app
 
+# Install jemalloc to eliminate V8 heap fragmentation during continuous SSE streaming
+RUN apk add --no-cache jemalloc
+
 ENV NODE_ENV=production
 ENV PORT=4000
+ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
+ENV NODE_OPTIONS="--max-old-space-size=512 --optimize-for-size"
 
 # Install runtime dependencies only
 COPY package*.json ./
