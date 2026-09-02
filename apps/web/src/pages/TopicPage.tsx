@@ -234,7 +234,13 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   };
 
   const handleVote = async (nodeId: string, voteType: 'support' | 'contest') => {
-    if (!topic || !currentUser) return;
+    if (!currentUser) {
+      showToast('Sign in or register to cast votes on claims.', 'info');
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    if (!topic) return;
 
     const previousTopic = topic;
 
@@ -271,6 +277,12 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   };
 
   const handleAddClaim = async (parentId: string, edgeType: EdgeType, content: string) => {
+    if (!currentUser) {
+      showToast('Sign in or register to add claims to this debate.', 'info');
+      setIsAuthModalOpen(true);
+      return;
+    }
+
     if (!topic) return;
 
     try {
@@ -295,6 +307,11 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   };
 
   const handleEditClaim = async (nodeId: string, newContent: string) => {
+    if (!currentUser) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+
     if (!topic) return;
     try {
       const res = await apiFetch(`/api/topics/${topic.id}/nodes/${nodeId}`, {
@@ -323,6 +340,11 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   };
 
   const handleDeleteClaim = async (nodeId: string) => {
+    if (!currentUser) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+
     if (!topic) return;
     try {
       const res = await apiFetch(`/api/topics/${topic.id}/nodes/${nodeId}`, {
@@ -350,6 +372,12 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
   };
 
   const handleFork = async () => {
+    if (!currentUser) {
+      showToast('Sign in or register to fork debates to your profile.', 'info');
+      setIsAuthModalOpen(true);
+      return;
+    }
+
     if (!topic) return;
     try {
       const res = await apiFetch(`/api/topics/${topic.id}/fork`, {
@@ -415,66 +443,6 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
       />
 
       <div className="app">
-        {/* Unauthenticated Access Barrier Gate */}
-        {!currentUser && !isLoading && (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '32px 24px', background: 'var(--marble)' }}>
-            <div
-              style={{
-                background: '#FFFDF8',
-                border: '1px solid var(--gold)',
-                borderRadius: '12px',
-                padding: '40px 32px',
-                maxWidth: '520px',
-                width: '100%',
-                textAlign: 'center',
-                boxShadow: '0 20px 50px rgba(43,38,34,0.15)'
-              }}
-            >
-              <h3 style={{ fontFamily: 'Cinzel, serif', fontSize: '19px', color: 'var(--ink)', margin: '0 0 12px', letterSpacing: '0.08em' }}>
-                AUTHENTICATION REQUIRED
-              </h3>
-              <p style={{ fontFamily: 'Crimson Pro, serif', fontSize: '16.5px', color: 'var(--ink-soft)', margin: '0 0 28px', lineHeight: 1.5 }}>
-                You must be signed in to view debate graph topologies, inspect claim standing, vote, or post dialectic arguments.
-              </p>
-              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                <button
-                  onClick={() => setIsAuthModalOpen(true)}
-                  style={{
-                    padding: '12px 24px',
-                    background: 'var(--gold)',
-                    color: '#FFFDF8',
-                    border: 'none',
-                    borderRadius: '8px',
-                    fontFamily: 'Inter, sans-serif',
-                    fontSize: '13.5px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    boxShadow: '0 4px 12px rgba(184, 137, 43, 0.25)'
-                  }}
-                >
-                  Sign In or Register →
-                </button>
-                <button
-                  onClick={() => navigate('/')}
-                  style={{
-                    padding: '12px 20px',
-                    background: 'transparent',
-                    color: 'var(--aegean)',
-                    border: '1px solid var(--marble-line)',
-                    borderRadius: '8px',
-                    fontFamily: 'Inter, sans-serif',
-                    fontSize: '13.5px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  ← Back to Discover
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Network Error Screen */}
         {errorMsg && (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
@@ -517,7 +485,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
         )}
 
         {/* Functional Graph Diff Engine View */}
-        {currentUser && !isLoading && !errorMsg && viewMode === 'diff' ? (
+        {!isLoading && !errorMsg && viewMode === 'diff' ? (
           <div className="canvas-area" style={{ display: 'flex', flexDirection: 'column' }}>
             {/* Diff Controls Header */}
             <div style={{ padding: '12px 24px', background: 'var(--marble-panel)', borderBottom: '1px solid var(--marble-line)', display: 'flex', alignItems: 'center', gap: '16px' }}>
@@ -591,7 +559,7 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
             )}
           </div>
         ) : (
-          currentUser && !isLoading && !errorMsg && topic && (
+          !isLoading && !errorMsg && topic && (
             <GraphCanvas
               nodes={topic.nodes}
               selectedId={selectedId}
@@ -603,9 +571,9 @@ export const TopicPage: React.FC<TopicPageProps> = ({ currentUser, onSwitchUser 
           )
         )}
 
-        {currentUser && !isLoading && !errorMsg && viewMode !== 'diff' && <Legend />}
+        {!isLoading && !errorMsg && viewMode !== 'diff' && <Legend />}
 
-        {currentUser && !isLoading && !errorMsg && (
+        {!isLoading && !errorMsg && topic && (
           <SidePanel
             selectedNode={selectedNode}
             currentUser={currentUser}

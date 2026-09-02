@@ -99,22 +99,58 @@ export async function createTopic(
 
 const MOCK_TOPICS: TopicSummary[] = [
   {
-    id: "mars-vs-earth",
-    title: "Should humanity prioritize colonizing Mars over repairing Earth's climate?",
-    rootNodeId: "root-mars",
-    forkCount: 12,
+    id: "ai-sentience-personhood",
+    title: "Should autonomous AI systems demonstrating sentience be granted legal personhood?",
+    rootNodeId: "ai-root",
+    forkCount: 18,
     createdAt: new Date().toISOString(),
     claimCount: 7,
-    rootClaimContent: "Humanity should prioritize colonizing Mars over repairing Earth's climate."
+    rootClaimContent: "Autonomous AI systems exhibiting verified metacognition and phenomenal sentience should be granted legal personhood and moral rights."
   },
   {
-    id: "ai-governance",
-    title: "Should frontier AI development be restricted by international treaties?",
-    rootNodeId: "root-ai",
-    forkCount: 8,
+    id: "mars-vs-earth",
+    title: "Should humanity prioritize multi-planetary colonization over planetary stewardship of Earth?",
+    rootNodeId: "mars-root",
+    forkCount: 24,
     createdAt: new Date().toISOString(),
-    claimCount: 5,
-    rootClaimContent: "Frontier AI development requires international non-proliferation treaties."
+    claimCount: 7,
+    rootClaimContent: "Humanity's highest existential imperative is establishing self-sufficient off-world colonies on Mars and the Moon before 2100."
+  },
+  {
+    id: "free-will-determinism",
+    title: "Is human free will an illusion in a deterministic universe governed by physical law?",
+    rootNodeId: "fw-root",
+    forkCount: 15,
+    createdAt: new Date().toISOString(),
+    claimCount: 7,
+    rootClaimContent: "Human conscious volition is an emergent illusion; every choice is the deterministic result of prior neurobiological and physical states."
+  },
+  {
+    id: "radical-longevity-ethics",
+    title: "Should society pursue biological immortality through genetic and cellular rejuvenation?",
+    rootNodeId: "longe-root",
+    forkCount: 14,
+    createdAt: new Date().toISOString(),
+    claimCount: 7,
+    rootClaimContent: "Eliminating biological aging and extending the healthy human lifespan indefinitely is a universal moral imperative."
+  },
+  {
+    id: "decentralized-governance-daos",
+    title: "Can decentralized autonomous organizations (DAOs) replace traditional representative democracy?",
+    rootNodeId: "dao-root",
+    forkCount: 9,
+    createdAt: new Date().toISOString(),
+    claimCount: 7,
+    rootClaimContent: "Cryptographic, transparent, and decentralized governance systems are superior to traditional centralized nation-state representative democracy."
+  },
+  {
+    id: "universal-basic-income-automation",
+    title: "Is Universal Basic Income (UBI) the only viable economic solution to artificial intelligence displacing cognitive labor?",
+    rootNodeId: "ubi-root",
+    forkCount: 21,
+    createdAt: new Date().toISOString(),
+    claimCount: 7,
+    rootClaimContent: "Universal Basic Income funded by sovereign wealth funds and automation taxation is essential to prevent systemic economic collapse as AI automates cognitive labor."
   }
 ];
 

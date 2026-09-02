@@ -42,12 +42,6 @@ export const HomePage: React.FC<HomePageProps> = ({ user, onUserChanged }) => {
   };
 
   const handleDebateCardClick = (topicId: string) => {
-    if (!user) {
-      setAuthNotice('Sign in or create an account to view and participate in debates.');
-      setAuthModalTab('signin');
-      setIsAuthModalOpen(true);
-      return;
-    }
     navigate(`/t/${topicId}`);
   };
 

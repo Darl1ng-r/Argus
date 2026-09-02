@@ -34,6 +34,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
+  const isInitialFitRef = useRef(false);
 
   // Initialize Cytoscape Instance
   useEffect(() => {
@@ -43,6 +44,9 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
       container: containerRef.current,
       boxSelectionEnabled: false,
       autounselectify: false,
+      userPanningEnabled: true,
+      userZoomingEnabled: true,
+      wheelSensitivity: 0.25,
       style: [
         {
           selector: 'node',
@@ -66,8 +70,8 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             'text-halign': 'center',
             content: 'data(label)',
             'overlay-opacity': 0,
-            'transition-property': 'background-color, border-color, opacity',
-            'transition-duration': 200,
+            'transition-property': 'background-color, border-color, opacity, underlay-opacity',
+            'transition-duration': 150,
           },
         },
         {
@@ -117,9 +121,10 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             'border-color': '#8F6414',
             'border-width': 3,
             'background-color': '#FFFDF8',
-            'underlay-color': 'rgba(143, 100, 20, 0.15)',
-            'underlay-padding': '4px',
+            'underlay-color': 'rgba(143, 100, 20, 0.2)',
+            'underlay-padding': '6px',
             'underlay-opacity': 1,
+            'underlay-shape': 'round-rectangle',
           },
         },
         {
@@ -176,6 +181,14 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     cy.on('tap', 'node', (evt: EventObject) => {
       const node = evt.target;
       onSelectNode(node.id());
+    });
+
+    cy.on('mouseover', 'node', () => {
+      if (containerRef.current) containerRef.current.style.cursor = 'pointer';
+    });
+
+    cy.on('mouseout', 'node', () => {
+      if (containerRef.current) containerRef.current.style.cursor = 'grab';
     });
 
     cy.on('tap', (evt: EventObject) => {
@@ -315,6 +328,12 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         }
       }
     });
+
+    // Auto-fit bounds on initial nodes load
+    if (!isInitialFitRef.current && nodes && nodes.length > 0) {
+      cy.fit(undefined, 60);
+      isInitialFitRef.current = true;
+    }
   }, [nodes, selectedId, viewMode]);
 
   // Smooth focus animation only when user selection ID changes
